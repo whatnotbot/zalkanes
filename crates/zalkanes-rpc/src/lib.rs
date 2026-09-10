@@ -19,7 +19,7 @@
 use std::net::SocketAddr;
 use std::sync::{Arc, RwLock};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use zalkanes_core::types::{
     BlockHash, BlockHeight, BlockRef, ContractId, Execution, Network, TxId,
@@ -260,6 +260,82 @@ fn parse_contract_id(s: &str) -> Option<ContractId> {
     let mut id = [0u8; 32];
     id.copy_from_slice(&bytes);
     Some(ContractId(id))
+}
+
+/// Readiness state for the health endpoint.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HealthState {
+    /// Process is alive but not yet connected to the chain source.
+    Starting,
+    /// Connected and indexing (behind the chain tip).
+    Syncing,
+    /// Indexer has caught up to the chain tip.
+    CaughtUp,
+    /// Database is unhealthy (e.g. failed to open) — 503.
+    Unhealthy,
+}
+
+/// Start a minimal HTTP health/readiness endpoint on `addr`.
+///
+/// Separate from the JSON-RPC server, for Railway / process supervisors:
+/// - `/health` → process alive (200 while up)
+/// - `/ready`  → 200 caught up; 202 syncing; 503 unhealthy
+pub async fn serve_health(addr: SocketAddr, handler: RpcHandler) -> Result<()> {
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context("bind health listener")?;
+    tracing::info!(%addr, "health/readiness endpoint listening");
+
+    loop {
+        let (socket, _) = listener.accept().await.context("accept")?;
+        let handler = handler.clone();
+        tokio::spawn(async move {
+            let _ = handle_health_conn(socket, handler).await;
+        });
+    }
+}
+
+async fn handle_health_conn(mut socket: tokio::net::TcpStream, handler: RpcHandler) -> Result<()> {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let mut buf = [0u8; 1024];
+    let n = socket.read(&mut buf).await?;
+    let request = String::from_utf8_lossy(&buf[..n]).to_string();
+    let path = request
+        .lines()
+        .next()
+        .and_then(|l| l.split_whitespace().nth(1))
+        .unwrap_or("/");
+
+    let (status, body) = match path {
+        "/health" => ("200 OK", "alive\n"),
+        "/ready" => match readiness(&handler) {
+            HealthState::CaughtUp => ("200 OK", "caught_up\n"),
+            HealthState::Syncing => ("202 Accepted", "syncing\n"),
+            HealthState::Starting => ("200 OK", "starting\n"),
+            HealthState::Unhealthy => ("503 Service Unavailable", "unhealthy\n"),
+        },
+        _ => ("404 Not Found", "not_found\n"),
+    };
+
+    let response = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: text/plain\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    socket.write_all(response.as_bytes()).await?;
+    socket.shutdown().await?;
+    Ok(())
+}
+
+fn readiness(handler: &RpcHandler) -> HealthState {
+    let info = handler.get_info();
+    match (info.indexed_height, info.chain_tip_height) {
+        (Some(i), Some(t)) if i >= t => HealthState::CaughtUp,
+        (Some(_), Some(_)) => HealthState::Syncing,
+        (Some(_), None) => HealthState::Syncing,
+        _ => HealthState::Starting,
+    }
 }
 
 /// Start the JSON-RPC server and return a handle that resolves when it stops.

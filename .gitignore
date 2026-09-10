@@ -3,6 +3,7 @@
 /.cargo/
 /.cargo-reproducible/
 *.wasm
+!crates/zalkanes-testkit/fixtures/*.wasm
 node_modules/
 package-lock.json
 Cargo.lock.orig

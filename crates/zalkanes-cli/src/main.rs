@@ -257,6 +257,18 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
         });
     }
 
+    // Spawn the health/readiness endpoint on a separate port.
+    {
+        let handler = handler.clone();
+        let health_port = port.saturating_add(1);
+        let health_addr = std::net::SocketAddr::from(([0, 0, 0, 0], health_port));
+        tokio::spawn(async move {
+            if let Err(e) = zalkanes_rpc::serve_health(health_addr, handler).await {
+                tracing::error!("health server failed: {e:#}");
+            }
+        });
+    }
+
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(%addr, "Zalkanes JSON-RPC server listening");
     zalkanes_rpc::serve(addr, handler).await
@@ -291,7 +303,11 @@ async fn indexing_loop(
         };
         *handler.chain_tip_handle().write().unwrap() = Some(tip);
 
-        // 2. Determine next height to index.
+        // 2. Reorg detection: if our indexed tip no longer matches the canonical
+        //    chain, roll back to the common ancestor.
+        handle_reorg(&source, &store).await?;
+
+        // 3. Determine next height to index.
         loop {
             let indexed = {
                 let g = store.read().unwrap();
@@ -360,6 +376,42 @@ async fn indexing_loop(
             }
         }
     }
+}
+
+/// Detect a reorg: compare our indexed block hash at each height against the
+/// canonical chain's hash, rolling back until they agree.
+async fn handle_reorg(source: &Arc<RpcChainSource>, store: &SharedState) -> Result<()> {
+    loop {
+        let (indexed_height, indexed_hash) = {
+            let g = store.read().unwrap();
+            (g.indexed_height(), g.indexed_block_hash())
+        };
+
+        let Some(height) = indexed_height else { break };
+        let Some(our_hash) = indexed_hash else { break };
+
+        let canonical_hash = {
+            let s = source.clone();
+            tokio::task::spawn_blocking(move || s.block_hash(height)).await??
+        };
+
+        if canonical_hash.0 == our_hash.0 {
+            break; // in agreement — no reorg at this height
+        }
+
+        tracing::warn!(
+            height,
+            our = %hex::encode(our_hash.0),
+            canonical = %hex::encode(canonical_hash.0),
+            "reorg detected; rolling back"
+        );
+
+        {
+            let mut g = store.write().unwrap();
+            g.rollback_to(height - 1)?;
+        }
+    }
+    Ok(())
 }
 
 // ── contract build ───────────────────────────────────────────────────────────
