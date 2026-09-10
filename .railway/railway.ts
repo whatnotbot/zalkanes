@@ -1,17 +1,33 @@
-import { defineRailway, project, service, volume, preserve } from "railway/iac";
+import { defineRailway, project, service, volume, preserve, ref } from "railway/iac";
 
 // Zalkanes — Zcash-native WASM smart-contract metaprotocol.
 //
-// The `zalkanes` service is the indexer node: it connects to an upstream
-// Zcash JSON-RPC endpoint (Zebra / zcashd / NOWNodes) and serves its own
-// JSON-RPC API on $PORT.
+// Architecture (security model: our own full Zebra validator is the trust anchor):
 //
-// Secrets set on Railway (never committed, preserved by this config):
-//   - ZALKANES_RPC_URL      upstream Zcash RPC
-//   - ZALKANES_RPC_API_KEY  optional `api-key` header for hosted providers
+//   Zebra (regtest, private) ── JSON-RPC ──► Zalkanes indexer ──► public JSON-RPC
+//
+// `zebra` runs our own Zcash full node (consensus-validating) with a persistent
+// chain-state volume. `zalkanes` indexes from it and serves the public RPC.
 
 export default defineRailway(() => {
-  const data = volume("zalkanes-volume");
+  const zalkanesData = volume("zalkanes-volume");
+  const zebraData = volume("zebra-volume");
+
+  const zebra = service("zebra", {
+    build: {
+      builder: "DOCKERFILE",
+      dockerfilePath: "deploy/zebra/Dockerfile",
+    },
+    deploy: {
+      restartPolicyType: "ON_FAILURE",
+    },
+    variables: {
+      RUST_LOG: "info",
+    },
+    volumeMounts: {
+      "/data/zebra": zebraData,
+    },
+  });
 
   const zalkanes = service("zalkanes", {
     start: "zalkanes node serve",
@@ -28,16 +44,16 @@ export default defineRailway(() => {
       ZALKANES_NETWORK: "regtest",
       // Persistent RocksDB lives on the attached volume.
       ZALKANES_DATA_DIR: "/data/zalkanes",
-      // Preserve secrets managed outside this file.
-      ZALKANES_RPC_URL: preserve(),
+      // Our own Zebra node over the private network (trust anchor).
+      ZALKANES_RPC_URL: "http://zebra.railway.internal:18232",
       ZALKANES_RPC_API_KEY: preserve(),
     },
     volumeMounts: {
-      "/data/zalkanes": data,
+      "/data/zalkanes": zalkanesData,
     },
   });
 
   return project("zalkanes", {
-    resources: [zalkanes, data],
+    resources: [zebra, zalkanes, zalkanesData, zebraData],
   });
 });
