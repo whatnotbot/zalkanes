@@ -65,8 +65,21 @@ pub const MAX_STORAGE_WRITES_PER_CALL: u32 = 256;
 
 // ── I/O limits ───────────────────────────────────────────────────────────────
 
-/// Maximum byte length of call input data.
-pub const MAX_INPUT_BYTES: u32 = 65_536; // 64 KiB
+/// Maximum byte length of inline (OP_RETURN-embedded) CALL input.
+///
+/// `80 (OP_RETURN policy max) - 6 (header) - 32 (contract_id) - 2 (opcode)
+/// - 2 (input_length) = 38`.
+pub const MAX_CALL_INLINE_BYTES: u32 = 38;
+
+/// Maximum byte length of carrier-delivered CALL input.
+///
+/// 64 KiB, delivered via the P2SH carrier (see `MAX_CALL_CARRIER_CHUNKS`).
+pub const MAX_CALL_INPUT_BYTES: u32 = 65_536; // 64 KiB
+
+/// Maximum number of carrier inputs for a carrier CALL.
+///
+/// `ceil(MAX_CALL_INPUT_BYTES / CHUNK_PAYLOAD_SIZE) = ceil(65536 / 1400) = 47`.
+pub const MAX_CALL_CARRIER_CHUNKS: u8 = 47;
 
 /// Maximum byte length of call return data.
 pub const MAX_RETURN_DATA_BYTES: u32 = 65_536; // 64 KiB
@@ -82,8 +95,11 @@ pub const PROTOCOL_V0: u8 = 0x00;
 /// Message type: DEPLOY.
 pub const MSG_DEPLOY: u8 = 0x01;
 
-/// Message type: CALL.
+/// Message type: CALL (inline input, embedded in OP_RETURN).
 pub const MSG_CALL: u8 = 0x02;
+
+/// Message type: CALL_CARRIER (large input delivered via P2SH carrier).
+pub const MSG_CALL_CARRIER: u8 = 0x03;
 
 // ── Activation heights ───────────────────────────────────────────────────────
 

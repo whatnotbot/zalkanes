@@ -43,8 +43,9 @@ Rules:
 ## 3. Message types
 
 ```
-DEPLOY  = 0x01
-CALL    = 0x02
+DEPLOY       = 0x01
+CALL_INLINE  = 0x02
+CALL_CARRIER = 0x03
 ```
 
 ---
@@ -78,13 +79,20 @@ Total DEPLOY body: 39 bytes.
 Total OP_RETURN payload with header: 6 + 39 = 45 bytes.
 
 Validation:
-- `code_length` MUST be > 0 and <= MAX_CODE_BYTES.
-- `chunk_count` MUST be > 0 and <= 255.
+- `code_length` MUST be > 0 and <= MAX_CODE_BYTES (262144).
+- `chunk_count` MUST be > 0 and <= MAX_CHUNKS (188).
 - `output_index` MUST match the actual output index of this OP_RETURN.
 
 ---
 
-## 6. CALL message body
+## 6. CALL messages
+
+A CALL delivers method input to a deployed contract. Two encodings exist; the
+parser distinguishes them by `message_type`.
+
+### 6.1 CALL_INLINE (message_type = 0x02)
+
+Small inputs that fit entirely in the OP_RETURN payload.
 
 ```
 Field           Type    Bytes   Description
@@ -92,17 +100,50 @@ Field           Type    Bytes   Description
 contract_id     bytes   32      ContractId (see §8)
 opcode          u16     2       method selector
 input_length    u16     2       byte length of input data
-input           bytes   var     contract input; 0..MAX_INPUT_BYTES
+input           bytes   var     contract input; 0..MAX_CALL_INLINE_BYTES
 ```
 
 Total CALL body (excluding input): 36 bytes.
-Max input: MAX_INPUT_BYTES (see consensus constants).
+Total OP_RETURN payload with header: 6 + 36 + input.
+
+`MAX_CALL_INLINE_BYTES = 80 - 6 - 32 - 2 - 2 = 38`.
 
 Validation:
 - `contract_id` MUST reference a deployed contract.
 - `input_length` MUST equal actual `input` length.
-- `input_length` MUST be <= MAX_INPUT_BYTES.
+- `input_length` MUST be <= MAX_CALL_INLINE_BYTES (38).
 - Trailing bytes after `input[input_length]`: REJECT.
+
+### 6.2 CALL_CARRIER (message_type = 0x03)
+
+Large inputs (up to MAX_CALL_INPUT_BYTES) are delivered through the same
+authenticated P2SH carrier used for DEPLOY (§7). The OP_RETURN carries the
+calldata commitment; the calldata itself rides in carrier scriptSigs.
+
+```
+Field           Type    Bytes   Description
+─────────────────────────────────────────────────────────
+contract_id     bytes   32      ContractId (see §8)
+opcode          u16     2       method selector
+input_hash      bytes   32      SHA-256 of the exact calldata bytes
+input_length    u32     4       exact byte length of calldata
+carrier_count   u8      1       number of P2SH carrier inputs
+```
+
+Total CALL_CARRIER body: 71 bytes.
+Total OP_RETURN payload with header: 6 + 71 = 77 bytes.
+
+Validation:
+- `contract_id` MUST reference a deployed contract.
+- `input_length` MUST be > MAX_CALL_INLINE_BYTES and <= MAX_CALL_INPUT_BYTES.
+- `carrier_count` MUST be > 0 and <= MAX_CALL_CARRIER_CHUNKS.
+- Reconstructed calldata MUST satisfy `SHA-256(calldata) == input_hash` and
+  `len(calldata) == input_length` before execution.
+
+`MAX_CALL_INPUT_BYTES = 65536` (64 KiB); `MAX_CALL_CARRIER_CHUNKS = ceil(65536 / 1400) = 47`.
+
+A failed CALL_CARRIER (bad hash, bad length, missing/duplicate/out-of-range
+chunk) is rejected with no state mutation, exactly like a failed DEPLOY.
 
 ---
 
@@ -126,12 +167,18 @@ Reconstruction:
 If any chunk is missing, duplicated, or out of range: REJECT.
 Reconstruction is deterministic regardless of input ordering in the transaction.
 
-Redeem script (P2SH):
+Redeem script (P2SH) — the **exact** 36 bytes accepted on regtest and public
+testnet (no "conceptual" scripts):
+
 ```
-<deployer_pubkey> OP_CHECKSIG
+0x21 <deployer_pubkey(33 bytes)> 0xac 0x61
 ```
-The carrier UTXO is not anyone-can-spend.
-A different key cannot spend the prepared carrier UTXO (Zcash script validation enforces this).
+
+i.e. `<deployer_pubkey> OP_CHECKSIG OP_NOP`. The trailing `OP_NOP` makes the
+script non-standard as a solver template, which is what permits the extra
+`chunk_index`/`chunk_data` pushes to remain below the final `true` value (see
+ADR-0003). The carrier UTXO is not anyone-can-spend; a different key cannot
+spend it (Zcash script validation enforces this).
 
 ---
 
@@ -192,8 +239,12 @@ chunk data will cause `SHA-256(reconstructed) != code_hash` and REJECT.
 See `crates/zalkanes-core/src/consensus.rs` for authoritative values.
 
 ```
-MAX_CODE_BYTES              = 512 * 1024       // 512 KiB
-MAX_INPUT_BYTES             = 65_536           // 64 KiB
+MAX_CODE_BYTES              = 262_144           // 256 KiB
+MAX_CHUNKS                  = 188               // carrier chunks per deploy
+CHUNK_PAYLOAD_SIZE          = 1_400             // bytes per carrier scriptSig
+MAX_CALL_INLINE_BYTES       = 38                // inline CALL input
+MAX_CALL_INPUT_BYTES        = 65_536            // 64 KiB (carrier CALL)
+MAX_CALL_CARRIER_CHUNKS     = 47                // ceil(65536 / 1400)
 MAX_RETURN_DATA_BYTES       = 65_536
 MAX_STORAGE_KEY_BYTES       = 256
 MAX_STORAGE_VALUE_BYTES     = 65_536

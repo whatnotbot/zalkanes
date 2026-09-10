@@ -15,7 +15,7 @@ use tracing::{debug, info, warn};
 use zalkanes_carrier::{extract_op_return_data, Chunk};
 use zalkanes_core::{
     consensus::{MAINNET_ACTIVATION_HEIGHT, REGTEST_ACTIVATION_HEIGHT, TESTNET_ACTIVATION_HEIGHT},
-    types::{BlockHash, BlockHeight, ContractId, Execution, Network, StateRoot},
+    types::{BlockHash, BlockHeight, CodeHash, ContractId, Execution, Network, StateRoot},
 };
 use zalkanes_protocol::{parse_op_return, Message};
 use zalkanes_runtime::{execute, CallContext, CallResult, StorageWrite};
@@ -221,6 +221,9 @@ fn process_transaction(
             Ok(Some(Message::Call(call))) => {
                 handle_call(store, commit, executions, tx, call)?;
             }
+            Ok(Some(Message::CallCarrier(call))) => {
+                handle_call_carrier(store, commit, executions, tx, call)?;
+            }
             Ok(None) => {}
             Err(e) => {
                 debug!(txid = %tx.txid, error = %e, "parse error in OP_RETURN; skipping");
@@ -285,13 +288,71 @@ fn handle_call(
     tx: &ParsedTransaction,
     call: zalkanes_protocol::CallMessage,
 ) -> Result<()> {
+    execute_call(
+        store,
+        commit,
+        executions,
+        tx,
+        call.contract_id,
+        call.opcode,
+        call.input,
+    )
+}
+
+fn handle_call_carrier(
+    store: &mut dyn StateStore,
+    commit: &mut BlockCommit,
+    executions: &mut Vec<Execution>,
+    tx: &ParsedTransaction,
+    call: zalkanes_protocol::CallCarrierMessage,
+) -> Result<()> {
+    // Collect carrier chunks from transparent inputs, in order.
+    let mut chunks: Vec<Chunk> = Vec::new();
+    for (_idx, script_sig) in &tx.inputs {
+        if let Some((index, data)) = zalkanes_carrier::chunk_from_script_sig(script_sig) {
+            chunks.push(Chunk { index, data });
+        }
+    }
+
+    let expected_hash = CodeHash(call.input_hash);
+    match zalkanes_carrier::reconstruct(
+        &chunks,
+        call.carrier_count,
+        call.input_length,
+        &expected_hash,
+    ) {
+        Ok(calldata) => execute_call(
+            store,
+            commit,
+            executions,
+            tx,
+            call.contract_id,
+            call.opcode,
+            calldata,
+        ),
+        Err(e) => {
+            debug!(txid = %tx.txid, error = %e, "calldata reconstruction failed; rejecting carrier call");
+            Ok(())
+        }
+    }
+}
+
+fn execute_call(
+    store: &mut dyn StateStore,
+    commit: &mut BlockCommit,
+    executions: &mut Vec<Execution>,
+    tx: &ParsedTransaction,
+    contract_id: ContractId,
+    opcode: u16,
+    input: Vec<u8>,
+) -> Result<()> {
     let ctx = CallContext {
-        contract_id: call.contract_id,
+        contract_id,
         caller: None,
         txid: tx.txid,
         block_height: 0, // patched below; CallContext needs height — see note
-        opcode: call.opcode,
-        input: call.input.clone(),
+        opcode,
+        input,
         fuel_limit: zalkanes_core::consensus::MAX_FUEL_PER_CALL,
         depth: 0,
     };
@@ -334,8 +395,8 @@ fn handle_call(
 
     executions.push(Execution {
         txid: tx.txid,
-        contract_id: call.contract_id,
-        opcode: call.opcode,
+        contract_id,
+        opcode,
         success,
         fuel_used,
         return_data: output,
@@ -347,9 +408,9 @@ fn handle_call(
     });
 
     if success {
-        debug!(contract = %call.contract_id, fuel_used, "call succeeded");
+        debug!(contract = %contract_id, fuel_used, "call succeeded");
     } else {
-        debug!(contract = %call.contract_id, "call failed");
+        debug!(contract = %contract_id, "call failed");
     }
     Ok(())
 }

@@ -9,7 +9,8 @@
 
 use zalkanes_core::{
     consensus::{
-        MAX_CODE_BYTES, MAX_INPUT_BYTES, MSG_CALL, MSG_DEPLOY, PROTOCOL_MAGIC, PROTOCOL_V0,
+        MAX_CALL_CARRIER_CHUNKS, MAX_CALL_INLINE_BYTES, MAX_CALL_INPUT_BYTES, MAX_CODE_BYTES,
+        MSG_CALL, MSG_CALL_CARRIER, MSG_DEPLOY, PROTOCOL_MAGIC, PROTOCOL_V0,
     },
     types::{CodeHash, ContractId},
 };
@@ -19,6 +20,7 @@ use zalkanes_core::{
 pub enum Message {
     Deploy(DeployMessage),
     Call(CallMessage),
+    CallCarrier(CallCarrierMessage),
 }
 
 /// A DEPLOY message parsed from an OP_RETURN payload.
@@ -34,15 +36,33 @@ pub struct DeployMessage {
     pub output_index: u16,
 }
 
-/// A CALL message parsed from an OP_RETURN payload.
+/// A CALL message (inline input) parsed from an OP_RETURN payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallMessage {
     /// Target contract.
     pub contract_id: ContractId,
     /// Method selector.
     pub opcode: u16,
-    /// Call input bytes.
+    /// Call input bytes (inline, ≤ MAX_CALL_INLINE_BYTES).
     pub input: Vec<u8>,
+}
+
+/// A CALL_CARRIER message (large input) parsed from an OP_RETURN payload.
+///
+/// The calldata itself rides in P2SH carrier scriptSigs; this message commits to
+/// it via `input_hash` + `input_length`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallCarrierMessage {
+    /// Target contract.
+    pub contract_id: ContractId,
+    /// Method selector.
+    pub opcode: u16,
+    /// SHA-256 of the exact calldata bytes.
+    pub input_hash: [u8; 32],
+    /// Exact byte length of calldata.
+    pub input_length: u32,
+    /// Number of P2SH carrier inputs carrying calldata chunks.
+    pub carrier_count: u8,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -59,10 +79,14 @@ pub enum ParseError {
     TrailingBytes,
     #[error("code_length {0} exceeds MAX_CODE_BYTES {1}")]
     CodeLengthExceedsMax(u32, u32),
-    #[error("input_length {0} exceeds MAX_INPUT_BYTES {1}")]
+    #[error("input_length {0} exceeds MAX_CALL_INLINE_BYTES {1}")]
     InputLengthExceedsMax(u32, u32),
+    #[error("carrier input_length {0} exceeds MAX_CALL_INPUT_BYTES {1}")]
+    CarrierInputLengthExceedsMax(u32, u32),
     #[error("declared input_length {declared} != actual bytes {actual}")]
     InputLengthMismatch { declared: u16, actual: usize },
+    #[error("carrier_count {0} exceeds MAX_CALL_CARRIER_CHUNKS {1}")]
+    CarrierCountExceedsMax(u8, u8),
 }
 
 /// Parse a Zalkanes protocol message from an OP_RETURN payload.
@@ -95,6 +119,7 @@ pub fn parse_op_return(payload: &[u8]) -> Result<Option<Message>, ParseError> {
     let msg = match msg_type {
         MSG_DEPLOY => Message::Deploy(parse_deploy(body)?),
         MSG_CALL => Message::Call(parse_call(body)?),
+        MSG_CALL_CARRIER => Message::CallCarrier(parse_call_carrier(body)?),
         other => return Err(ParseError::UnknownMessageType(other)),
     };
 
@@ -150,10 +175,10 @@ fn parse_call(body: &[u8]) -> Result<CallMessage, ParseError> {
     let opcode = u16::from_be_bytes([body[32], body[33]]);
     let input_length = u16::from_be_bytes([body[34], body[35]]);
 
-    if input_length as u32 > MAX_INPUT_BYTES {
+    if input_length as u32 > MAX_CALL_INLINE_BYTES {
         return Err(ParseError::InputLengthExceedsMax(
             input_length as u32,
-            MAX_INPUT_BYTES,
+            MAX_CALL_INLINE_BYTES,
         ));
     }
 
@@ -169,6 +194,50 @@ fn parse_call(body: &[u8]) -> Result<CallMessage, ParseError> {
         contract_id,
         opcode,
         input: input_data.to_vec(),
+    })
+}
+
+fn parse_call_carrier(body: &[u8]) -> Result<CallCarrierMessage, ParseError> {
+    // contract_id (32) + opcode (2) + input_hash (32) + input_length (4)
+    // + carrier_count (1) = 71
+    if body.len() < 71 {
+        return Err(ParseError::Truncated);
+    }
+    if body.len() > 71 {
+        return Err(ParseError::TrailingBytes);
+    }
+
+    let mut id_bytes = [0u8; 32];
+    id_bytes.copy_from_slice(&body[0..32]);
+    let contract_id = ContractId(id_bytes);
+
+    let opcode = u16::from_be_bytes([body[32], body[33]]);
+
+    let mut input_hash = [0u8; 32];
+    input_hash.copy_from_slice(&body[34..66]);
+
+    let input_length = u32::from_be_bytes([body[66], body[67], body[68], body[69]]);
+    if input_length == 0 || input_length > MAX_CALL_INPUT_BYTES {
+        return Err(ParseError::CarrierInputLengthExceedsMax(
+            input_length,
+            MAX_CALL_INPUT_BYTES,
+        ));
+    }
+
+    let carrier_count = body[70];
+    if carrier_count == 0 || carrier_count > MAX_CALL_CARRIER_CHUNKS {
+        return Err(ParseError::CarrierCountExceedsMax(
+            carrier_count,
+            MAX_CALL_CARRIER_CHUNKS,
+        ));
+    }
+
+    Ok(CallCarrierMessage {
+        contract_id,
+        opcode,
+        input_hash,
+        input_length,
+        carrier_count,
     })
 }
 
@@ -196,6 +265,20 @@ pub fn encode_call(msg: &CallMessage) -> Vec<u8> {
     out.extend_from_slice(&msg.opcode.to_be_bytes());
     out.extend_from_slice(&input_len.to_be_bytes());
     out.extend_from_slice(&msg.input);
+    out
+}
+
+/// Serialize a CALL_CARRIER message into an OP_RETURN payload (77 bytes).
+pub fn encode_call_carrier(msg: &CallCarrierMessage) -> Vec<u8> {
+    let mut out = Vec::with_capacity(6 + 71);
+    out.extend_from_slice(&PROTOCOL_MAGIC);
+    out.push(PROTOCOL_V0);
+    out.push(MSG_CALL_CARRIER);
+    out.extend_from_slice(&msg.contract_id.0);
+    out.extend_from_slice(&msg.opcode.to_be_bytes());
+    out.extend_from_slice(&msg.input_hash);
+    out.extend_from_slice(&msg.input_length.to_be_bytes());
+    out.push(msg.carrier_count);
     out
 }
 
