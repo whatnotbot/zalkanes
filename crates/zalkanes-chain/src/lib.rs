@@ -55,6 +55,11 @@ impl RpcChainSource {
     }
 
     /// Validate connection: check network and basic reachability.
+    /// Verify the RPC connection + network selection.
+    ///
+    /// This checks that the upstream reports the expected network and is
+    /// reachable. It does NOT independently validate the Zcash chain — only
+    /// a locally operated, consensus-validating Zebra node provides that.
     pub fn validate(&self) -> Result<()> {
         let info = self.get_blockchain_info()?;
         if info.chain != self.network.zebra_name() {
@@ -67,7 +72,7 @@ impl RpcChainSource {
         tracing::info!(
             chain = info.chain,
             blocks = info.blocks,
-            "chain source validated"
+            "chain source connection verified"
         );
         Ok(())
     }
@@ -108,6 +113,19 @@ impl RpcChainSource {
 
     fn get_blockchain_info(&self) -> Result<BlockchainInfo> {
         self.rpc_call("getblockchaininfo", serde_json::json!([]))
+    }
+
+    /// Broadcast a signed raw transaction (hex) to the mempool.
+    /// Returns the txid (hex).
+    pub fn send_raw_transaction(&self, raw_tx_hex: &str) -> Result<String> {
+        self.rpc_call("sendrawtransaction", serde_json::json!([raw_tx_hex]))
+    }
+
+    /// Mine a block to `address` on regtest (Zebra internal miner uses the
+    /// configured miner address; this is a convenience wrapper that returns the
+    /// resulting block hash for `generatetoaddress`-style RPCs).
+    pub fn generate_to_address(&self, blocks: u32, address: &str) -> Result<Vec<String>> {
+        self.rpc_call("generatetoaddress", serde_json::json!([blocks, address]))
     }
 }
 

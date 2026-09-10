@@ -3,7 +3,7 @@
 FROM rust:1.88-slim-bookworm AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev clang libclang-dev protobuf-compiler && \
+    pkg-config libssl-dev clang libclang-dev protobuf-compiler git ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 # Pin the Zebra release that Zalkanes locks against.
