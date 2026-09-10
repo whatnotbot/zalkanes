@@ -110,14 +110,25 @@ Maximum v0 contract size = 255 chunks × 1400 bytes = **357,000 bytes (≈348 Ki
 
 ## ZIP-244 / txid implications
 
-On regtest the target height is Canopy, so transactions use **version 4** and
-the **Canopy branch ID** (`e9ff75a6`), with the v4 (legacy) sighash. The
-`code_hash` in the OP_RETURN output commits the effecting data; reconstruction
-verifies `SHA-256(reconstructed) == code_hash`, rejecting any carrier mutation.
+Zalkanes builds **version 4** transparent transactions and signs them with the
+legacy ZIP-243 sighash. V4 remains consensus-valid on every current network
+upgrade (Zebra's `verify_v4_transaction_network_upgrade` accepts V4 through
+Nu6.3). The ZIP-243 sighash personalization embeds a **consensus branch id**,
+and the validator recomputes it from the network upgrade active at the spending
+height (`NetworkUpgrade::current(network, height).branch_id()`), so the branch
+id is per-network and height-dependent, not a constant:
 
-When the protocol later activates on testnet/mainnet at NU5+ heights, the
-DEPLOY transaction will use the version-appropriate branch ID and ZIP-244
-txid; the carrier mechanism itself is unchanged.
+| Network          | Branch id   | Upgrade |
+|------------------|-------------|---------|
+| regtest (Zebra)  | `0xE9FF75A6` | Canopy  |
+| testnet (current)| `0x37A5165B` | Nu6.3   |
+| mainnet          | *(unset)*   | pre-audit |
+
+`zalkanes_tx::branch_id_for_network` pins this mapping. The carrier mechanism
+itself (redeem script + scriptSig encoding) is network-independent and unchanged;
+only the sighash branch id differs per network. The `code_hash` in the OP_RETURN
+output commits the effecting data; reconstruction verifies
+`SHA-256(reconstructed) == code_hash`, rejecting any carrier mutation.
 
 ## Fee behavior
 

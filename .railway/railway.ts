@@ -76,6 +76,31 @@ export default defineRailway(() => {
     },
   });
 
+  // Zalkanes testnet indexer (separate from regtest). Indexes from our own
+  // Zebra testnet validator; its RocksDB lives on its own volume.
+  const zalkanesTestnetData = volume("zalkanes-testnet-volume", {
+    region: "ams",
+    sizeMB: 50_000,
+  });
+
+  const zalkanesTestnet = service("zalkanes-testnet", {
+    start: "zalkanes node serve",
+    source: github("whatnotbot/zalkanes", { branch: "main" }),
+    build: {
+      builder: "DOCKERFILE",
+      dockerfilePath: "Dockerfile",
+    },
+    variables: {
+      RUST_LOG: "zalkanes=info",
+      ZALKANES_NETWORK: "testnet",
+      ZALKANES_DATA_DIR: "/data/zalkanes",
+      ZALKANES_RPC_URL: "http://zebra-testnet.railway.internal:18232",
+    },
+    volumeMounts: {
+      "/data/zalkanes": zalkanesTestnetData,
+    },
+  });
+
   return project("zalkanes", {
     resources: [
       zebra,
@@ -84,6 +109,8 @@ export default defineRailway(() => {
       zebraData,
       zebraTestnet,
       zebraTestnetData,
+      zalkanesTestnet,
+      zalkanesTestnetData,
     ],
   });
 });
