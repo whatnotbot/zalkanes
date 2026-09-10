@@ -1,4 +1,4 @@
-import { defineRailway, project, service } from "railway/iac";
+import { defineRailway, project, service, volume, preserve } from "railway/iac";
 
 // Zalkanes — Zcash-native WASM smart-contract metaprotocol.
 //
@@ -6,24 +6,38 @@ import { defineRailway, project, service } from "railway/iac";
 // Zcash JSON-RPC endpoint (Zebra / zcashd / NOWNodes) and serves its own
 // JSON-RPC API on $PORT.
 //
-// Required variables (set as Railway secrets, never committed):
-//   - ZALKANES_RPC_URL      upstream Zcash RPC, e.g. https://zec.nownodes.io/<key>
+// Secrets set on Railway (never committed, preserved by this config):
+//   - ZALKANES_RPC_URL      upstream Zcash RPC
 //   - ZALKANES_RPC_API_KEY  optional `api-key` header for hosted providers
-//   - ZALKANES_NETWORK      mainnet | testnet | regtest (default: regtest)
 
 export default defineRailway(() => {
+  const data = volume("zalkanes-volume");
+
   const zalkanes = service("zalkanes", {
     start: "zalkanes node serve",
-    builder: "dockerfile",
-    dockerfilePath: "Dockerfile",
-    restart: "on_failure",
+    build: {
+      builder: "DOCKERFILE",
+      dockerfilePath: "Dockerfile",
+    },
+    deploy: {
+      healthcheckPath: "/health",
+      restartPolicyType: "ON_FAILURE",
+    },
     variables: {
       RUST_LOG: "zalkanes=info",
       ZALKANES_NETWORK: "regtest",
+      // Persistent RocksDB lives on the attached volume.
+      ZALKANES_DATA_DIR: "/data/zalkanes",
+      // Preserve secrets managed outside this file.
+      ZALKANES_RPC_URL: preserve(),
+      ZALKANES_RPC_API_KEY: preserve(),
+    },
+    volumeMounts: {
+      "/data/zalkanes": data,
     },
   });
 
   return project("zalkanes", {
-    resources: [zalkanes],
+    resources: [zalkanes, data],
   });
 });
