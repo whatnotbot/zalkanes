@@ -34,6 +34,7 @@ pub type SharedState = Arc<RwLock<Box<dyn StateStore>>>;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct InfoResponse {
     pub protocol_version: u8,
+    pub protocol_manifest_hash: String,
     pub network: String,
     pub indexed_height: Option<BlockHeight>,
     pub chain_tip_height: Option<BlockHeight>,
@@ -114,6 +115,7 @@ impl RpcHandler {
         };
         InfoResponse {
             protocol_version: 0,
+            protocol_manifest_hash: zalkanes_core::protocol_manifest_hash_hex(),
             network: self.network.zebra_name().to_string(),
             indexed_height,
             chain_tip_height,

@@ -1,0 +1,83 @@
+# Zalkanes protocol v0 — canonical machine-readable manifest.
+#
+# Every consensus-affecting constant MUST live here. The protocol manifest hash
+# (PROTOCOL_V0_MANIFEST_HASH) is SHA-256 over the exact bytes of this file, so
+# any change to a consensus constant changes the hash. Two nodes with different
+# manifest hashes MUST NOT claim protocol compatibility.
+#
+# Do not reorder or reformat casually: the hash commits to the exact bytes.
+
+[protocol]
+version = 0
+status = "FROZEN-RC"
+magic = [0x5A, 0x41, 0x4C, 0x4B] # "ZALK"
+
+[message]
+deploy = 1
+call_inline = 2
+call_carrier = 3
+
+[hash]
+code_hash = "sha256"
+contract_id = "blake2b-256"
+contract_id_personalization = "ZalkContractId0 "
+state_root = "blake2b-256"
+state_leaf_personalization = "ZalkStateLeaf0  "
+state_root_personalization = "ZalkStateRoot0  "
+state_root_version = 1
+
+[transaction]
+version = 5
+txid_scheme = "zip244"
+sighash_scheme = "zip244"
+
+[carrier]
+# <deployer_pubkey> OP_CHECKSIG OP_NOP
+redeem_script_hex = "21{pubkey33}ac61"
+redeem_script_len = 36
+max_push_size = 520
+max_standard_scriptsig_size = 1650
+chunk_payload_size = 1400
+
+[wasm]
+engine = "wasmi"
+engine_version = "2.0.0"
+floating_point = false
+memory64 = false
+simd = false
+threads = false
+metered_fuel = true
+
+[limits]
+max_code_bytes = 262144
+max_chunks = 188
+max_call_inline_bytes = 38
+max_call_input_bytes = 65536
+max_call_carrier_chunks = 47
+max_return_data_bytes = 65536
+max_storage_key_bytes = 256
+max_storage_value_bytes = 65536
+max_storage_writes_per_call = 256
+max_fuel_per_call = 10000000
+max_fuel_per_zcash_tx = 100000000
+max_fuel_per_zcash_block = 1000000000
+max_call_depth = 16
+max_linear_memory_pages = 256
+max_table_elements = 16384
+max_globals = 512
+max_functions = 4096
+max_imports = 64
+max_exports = 64
+
+[network]
+mainnet_activation_height = "None"
+testnet_activation_height = 4338100
+regtest_activation_height = 1
+
+[upstream]
+zebra_version = "6.3.0"
+zcash_primitives = "0.30.1"
+zcash_protocol = "0.10.6"
+zcash_transparent = "0.10.0"
+zcash_script = "0.4.3"
+wasmi = "2.0.0"
