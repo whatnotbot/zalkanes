@@ -63,7 +63,7 @@ pub struct CallContext {
     pub depth: u32,
 }
 
-/// Validate a WASM module against the v0 feature set.
+/// Validate a WASM module against the v0 feature set and structural limits.
 pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
     if wasm.len() as u32 > MAX_CODE_BYTES {
         return Err(format!(
@@ -73,7 +73,56 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
         ));
     }
     let engine = Engine::default();
-    Module::new(&engine, wasm).map_err(|e| format!("WASM parse error: {e}"))?;
+    let module = Module::new(&engine, wasm).map_err(|e| format!("WASM parse error: {e}"))?;
+
+    // Structural limits. Wasmi 2.0.0 exposes import/export counts and the
+    // imported/exported memory + table types; the Zalkanes host ABI requires the
+    // contract to export `memory`, so the memory limit is covered by the exports.
+    let import_count = module.imports().len();
+    if import_count > MAX_IMPORTS as usize {
+        return Err(format!(
+            "import count {import_count} exceeds MAX_IMPORTS {MAX_IMPORTS}"
+        ));
+    }
+    let export_count = module.exports().count();
+    if export_count > MAX_EXPORTS as usize {
+        return Err(format!(
+            "export count {export_count} exceeds MAX_EXPORTS {MAX_EXPORTS}"
+        ));
+    }
+    for import in module.imports() {
+        enforce_memory_table_limits(&import.ty().clone())?;
+    }
+    for export in module.exports() {
+        enforce_memory_table_limits(&export.ty().clone())?;
+    }
+    Ok(())
+}
+
+fn enforce_memory_table_limits(ty: &wasmi::ExternType) -> Result<(), String> {
+    match ty {
+        wasmi::ExternType::Memory(mt) => {
+            if mt.minimum() > MAX_LINEAR_MEMORY_PAGES as u64
+                || mt
+                    .maximum()
+                    .is_some_and(|m| m > MAX_LINEAR_MEMORY_PAGES as u64)
+            {
+                return Err(format!(
+                    "memory exceeds MAX_LINEAR_MEMORY_PAGES {MAX_LINEAR_MEMORY_PAGES}"
+                ));
+            }
+        }
+        wasmi::ExternType::Table(tt) => {
+            if tt.minimum() > MAX_TABLE_ELEMENTS as u64
+                || tt.maximum().is_some_and(|m| m > MAX_TABLE_ELEMENTS as u64)
+            {
+                return Err(format!(
+                    "table exceeds MAX_TABLE_ELEMENTS {MAX_TABLE_ELEMENTS}"
+                ));
+            }
+        }
+        _ => {}
+    }
     Ok(())
 }
 
@@ -289,6 +338,14 @@ fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
                     }
                     (data[ks..ke].to_vec(), data[vs..ve].to_vec())
                 };
+                {
+                    let overlay = &caller.data().overlay;
+                    if overlay.len() >= MAX_STORAGE_WRITES_PER_CALL as usize
+                        && !overlay.contains_key(&key)
+                    {
+                        return -1;
+                    }
+                }
                 caller.data_mut().overlay.insert(key, Some(val));
                 0
             },
@@ -314,6 +371,14 @@ fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
                     }
                     data[s..e].to_vec()
                 };
+                {
+                    let overlay = &caller.data().overlay;
+                    if overlay.len() >= MAX_STORAGE_WRITES_PER_CALL as usize
+                        && !overlay.contains_key(&key)
+                    {
+                        return -1;
+                    }
+                }
                 caller.data_mut().overlay.insert(key, None);
                 0
             },
