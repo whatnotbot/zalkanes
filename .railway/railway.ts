@@ -23,7 +23,7 @@ export default defineRailway(() => {
     },
   });
 
-  return project("courageous-surprise", {
+  return project("zalkanes", {
     resources: [zalkanes],
   });
 });
