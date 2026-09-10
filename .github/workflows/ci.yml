@@ -62,7 +62,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: EmbarkStudios/cargo-deny-action@v1
+      # Pin to v2 (cargo-deny 0.20.2); deny.toml uses the 0.20.x schema.
+      - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          arguments: "--workspace"
+          arguments: "--all-features"
