@@ -36,7 +36,6 @@ export default defineRailway(() => {
       dockerfilePath: "Dockerfile",
     },
     deploy: {
-      healthcheckPath: "/health",
       restartPolicyType: "ON_FAILURE",
     },
     variables: {
