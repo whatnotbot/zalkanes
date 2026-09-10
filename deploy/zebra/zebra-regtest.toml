@@ -16,4 +16,4 @@ listen_addr = "0.0.0.0:18232"
 
 [mining]
 internal_miner = true
-miner_address = "tmFvqyt4SBWHr8trRMc7Zc6Fipu2MPtM5WJ"
+miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
