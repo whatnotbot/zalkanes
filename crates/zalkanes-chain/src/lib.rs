@@ -62,7 +62,14 @@ impl RpcChainSource {
     /// a locally operated, consensus-validating Zebra node provides that.
     pub fn validate(&self) -> Result<()> {
         let info = self.get_blockchain_info()?;
-        if info.chain != self.network.zebra_name() {
+        // Zebra's getblockchaininfo reports regtest as "test" (regtest is a
+        // test network); zcashd reports it as "regtest". Accept either.
+        let expected_ok = match self.network {
+            Network::Mainnet => info.chain == "main",
+            Network::Testnet => info.chain == "test",
+            Network::Regtest => info.chain == "test" || info.chain == "regtest",
+        };
+        if !expected_ok {
             bail!(
                 "RPC reports network {:?} but expected {:?}",
                 info.chain,
