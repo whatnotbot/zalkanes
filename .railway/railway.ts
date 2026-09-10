@@ -1,25 +1,31 @@
-import { defineRailway, project, service, volume, preserve, ref } from "railway/iac";
+import { defineRailway, project, service, volume, preserve, ref, github } from "railway/iac";
 
 // Zalkanes — Zcash-native WASM smart-contract metaprotocol.
 //
 // Architecture (security model: our own full Zebra validator is the trust anchor):
 //
-//   Zebra (regtest, private) ── JSON-RPC ──► Zalkanes indexer ──► public JSON-RPC
+//   Zebra (regtest, private)  ── JSON-RPC ──► Zalkanes indexer ──► public JSON-RPC
+//   Zebra-testnet (private)   ── JSON-RPC ──► Zalkanes-testnet    ──► public JSON-RPC
 //
-// `zebra` runs our own Zcash full node (consensus-validating) with a persistent
-// chain-state volume. `zalkanes` indexes from it and serves the public RPC.
+// Each network has its own Zebra full node (consensus-validating) and its own
+// Zalkanes indexer, each with a persistent chain-state volume. Regtest and
+// testnet are fully isolated: they never share a volume or trust anchor.
 
 export default defineRailway(() => {
-  const zalkanesData = volume("zalkanes-volume");
-  const zebraData = volume("zebra-volume");
+  // Regtest (private) — the accepted Milestone-1 environment.
+  const zalkanesData = volume("zalkanes-volume", {
+    region: "ams",
+    sizeMB: 50_000,
+  });
+  const zebraData = volume("zebra-volume", {
+    region: "ams",
+    sizeMB: 50_000,
+  });
 
   const zebra = service("zebra", {
     build: {
       builder: "DOCKERFILE",
       dockerfilePath: "deploy/zebra/Dockerfile",
-    },
-    deploy: {
-      restartPolicyType: "ON_FAILURE",
     },
     variables: {
       RUST_LOG: "info",
@@ -35,9 +41,6 @@ export default defineRailway(() => {
       builder: "DOCKERFILE",
       dockerfilePath: "Dockerfile",
     },
-    deploy: {
-      restartPolicyType: "ON_FAILURE",
-    },
     variables: {
       RUST_LOG: "zalkanes=info",
       ZALKANES_NETWORK: "regtest",
@@ -52,7 +55,35 @@ export default defineRailway(() => {
     },
   });
 
+  // Public Zcash testnet — Milestone 2.
+  // Separate full Zebra validator (no miner; real testnet PoW), separate volume.
+  const zebraTestnetData = volume("zebra-testnet-volume", {
+    region: "ams",
+    sizeMB: 50_000,
+  });
+
+  const zebraTestnet = service("zebra-testnet", {
+    source: github("whatnotbot/zalkanes", { branch: "main" }),
+    build: {
+      builder: "DOCKERFILE",
+      dockerfilePath: "deploy/zebra/Dockerfile.testnet",
+    },
+    variables: {
+      RUST_LOG: "info",
+    },
+    volumeMounts: {
+      "/data/zebra": zebraTestnetData,
+    },
+  });
+
   return project("zalkanes", {
-    resources: [zebra, zalkanes, zalkanesData, zebraData],
+    resources: [
+      zebra,
+      zalkanes,
+      zalkanesData,
+      zebraData,
+      zebraTestnet,
+      zebraTestnetData,
+    ],
   });
 });

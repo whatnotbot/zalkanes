@@ -1,0 +1,20 @@
+# Zebra testnet configuration for Zalkanes (public Zcash testnet).
+# Separate from regtest; this is the trust anchor for testnet deployments.
+[network]
+network = "Testnet"
+listen_addr = "0.0.0.0:18233"
+
+[state]
+# Persistent testnet chain state on the Railway volume.
+cache_dir = "/data/zebra"
+ephemeral = false
+
+[consensus]
+# Testnet is small enough to sync from scratch; checkpoint_sync speeds up the
+# initial sync by trusting Zebra checkpoints (not a consensus fork).
+checkpoint_sync = true
+
+[rpc]
+listen_addr = "0.0.0.0:18232"
+# Private internal network only — Zalkanes connects over railway.internal.
+enable_cookie_auth = false

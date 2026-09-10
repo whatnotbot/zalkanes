@@ -1,0 +1,30 @@
+# syntax=docker/dockerfile:1
+# Zebra testnet node (full validator, no miner) for the Zalkanes public testnet.
+FROM rust:1.88-slim-bookworm AS builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config libssl-dev clang libclang-dev protobuf-compiler git ca-certificates && \
+    rm -rf /var/lib/apt/lists/*
+
+# Pin the Zebra release that Zalkanes locks against.
+ARG ZEBRA_TAG=v6.3.0
+RUN git clone --depth 1 --branch ${ZEBRA_TAG} https://github.com/ZcashFoundation/zebra.git /zebra
+
+WORKDIR /zebra
+# Plain zebrad: public testnet has real miners, no internal-miner feature.
+RUN cargo build --release --locked --bin zebrad
+
+# ── Runtime ───────────────────────────────────────────────────────────────────
+FROM debian:bookworm-slim AS runtime
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates libssl3 && \
+    rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /zebra/target/release/zebrad /usr/local/bin/zebrad
+COPY deploy/zebra/zebra-testnet.toml /etc/zebra/zebra.toml
+
+EXPOSE 18232 18233
+
+ENTRYPOINT ["zebrad"]
+CMD ["-c", "/etc/zebra/zebra.toml"]
