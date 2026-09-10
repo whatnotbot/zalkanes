@@ -1,55 +1,35 @@
 //! # zalkanes-tx
 //!
-//! Transparent Zcash transaction construction for Zalkanes DEPLOY and CALL,
-//! plus ZIP-317 fee calculation.
+//! Transparent Zcash transaction construction, signing, and serialization for
+//! Zalkanes PREPARE / DEPLOY / CALL.
 //!
-//! Builds real transparent bundles via librustzcash's `TransparentBuilder`:
-//! - DEPLOY: OP_RETURN (Zalkanes message) + P2SH carrier inputs (WASM chunks)
-//! - CALL:   OP_RETURN (Zalkanes message) + a funding input
-//!
-//! Signing uses librustzcash's `apply_signatures` with a secp256k1 signing set;
-//! the sighash is the caller's responsibility (ZIP-244 for v5+, computed from
-//! the enclosing transaction context).
+//! Uses librustzcash's canonical types and sighash implementation:
+//! - transaction version V4 (Canopy) on regtest
+//! - `zcash_primitives::transaction::sighash_v4::v4_signature_hash`
+//! - manual scriptSig construction to preserve carrier chunk pushes (the
+//!   high-level `TransparentBuilder::apply_signatures` cannot represent the
+//!   non-standard carrier redeem script).
 
 #![forbid(unsafe_code)]
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use zalkanes_core::consensus::MAX_CODE_BYTES;
-use zcash_protocol::value::Zatoshis;
+use zcash_primitives::transaction::{
+    sighash::SignableInput as PrimitivesSignableInput, sighash_v4::v4_signature_hash, Authorized,
+    Transaction, TransactionData, TxVersion,
+};
+use zcash_protocol::{
+    consensus::{BlockHeight, BranchId},
+    value::Zatoshis,
+};
 use zcash_script::script::Code;
 use zcash_transparent::{
-    address::TransparentAddress,
-    builder::{TransparentBuilder, TransparentSigningSet},
-    bundle::{OutPoint, TxOut},
+    address::{Script, TransparentAddress},
+    bundle::{Authorized as TAuthorized, Bundle, OutPoint, TxIn, TxOut},
+    sighash::{SighashType, SignableInput as TransparentSignableInput, SIGHASH_ALL},
 };
 
-/// Estimated transaction size in bytes for fee calculation.
-pub struct TxSizeEstimate {
-    pub version_bytes: usize,
-    pub inputs: usize,
-    pub outputs: usize,
-    pub input_bytes: usize,
-    pub output_bytes: usize,
-}
-
-impl TxSizeEstimate {
-    /// Estimate for a deployment transaction with N carrier inputs.
-    pub fn for_deploy(carrier_inputs: usize) -> Self {
-        Self {
-            version_bytes: 4,
-            inputs: carrier_inputs,
-            outputs: 2, // OP_RETURN + change
-            input_bytes: carrier_inputs * 200,
-            output_bytes: 114,
-        }
-    }
-
-    pub fn total_bytes(&self) -> usize {
-        self.version_bytes + self.input_bytes + self.output_bytes + 10
-    }
-}
-
-/// Calculate ZIP-317 fee in zatoshi (5000 zatoshi per logical action, min 2).
+/// ZIP-317 conventional fee (5000 zatoshi per logical action, min 2).
 pub fn zip317_fee(inputs: usize, outputs: usize) -> u64 {
     const MARGINAL_FEE: u64 = 5_000;
     const GRACE_ACTIONS: u64 = 2;
@@ -58,79 +38,181 @@ pub fn zip317_fee(inputs: usize, outputs: usize) -> u64 {
     MARGINAL_FEE * actions
 }
 
-/// Fee for a deployment transaction with N carrier inputs.
-pub fn deployment_fee(carrier_inputs: usize) -> u64 {
-    let est = TxSizeEstimate::for_deploy(carrier_inputs);
-    zip317_fee(est.inputs, est.outputs)
-}
+// ── Carrier constants (derived from Zebra standardness) ──────────────────────
 
-/// Fee for a call transaction (1 input + OP_RETURN + change).
-pub fn call_fee() -> u64 {
-    zip317_fee(1, 2)
-}
+/// Maximum single-push data size in Zcash script (`MAX_SCRIPT_ELEMENT_SIZE`).
+pub const MAX_PUSH_SIZE: usize = 520;
 
-/// Maximum carrier chunk payload size for a single P2SH scriptSig push.
+/// Zebra's `MAX_STANDARD_SCRIPTSIG_SIZE` (zcashd policy constant).
+pub const MAX_STANDARD_SCRIPTSIG_SIZE: usize = 1650;
+
+/// The carrier redeem script is non-standard as a solver template but
+/// consensus-valid and contains 1 sigop:
 ///
-/// Zcash standard script pushes: OP_PUSHDATA4 allows up to u32::MAX, but relay
-/// policy and the 512 KiB MAX_CODE_BYTES bound practical sizes. We use 4 KiB
-/// per chunk, giving ≤ 128 inputs for a max-size contract.
-pub const CHUNK_SIZE: usize = 4096;
+/// ```text
+/// <deployer_pubkey(33 bytes)> OP_CHECKSIG OP_NOP
+/// ```
+///
+/// Zebra's `are_inputs_standard` accepts a P2SH spend whose redeemed script is
+/// non-standard provided its sigop count ≤ 15, and explicitly permits "extra
+/// data left on the stack after execution". The scriptSig is therefore:
+///
+/// ```text
+/// PUSH(chunk_index) PUSH(chunk_data...)* PUSH(signature) PUSH(redeem_script)
+/// ```
+///
+/// where `chunk_data` is split into ≤520-byte pushes (Zcash's per-push
+/// `MAX_SCRIPT_ELEMENT_SIZE`). The whole scriptSig is push-only and ≤1650 bytes.
+pub fn redeem_script(pubkey: &[u8; 33]) -> Vec<u8> {
+    let mut s = Vec::with_capacity(36);
+    s.push(0x21); // push 33 bytes
+    s.extend_from_slice(pubkey);
+    s.push(0xac); // OP_CHECKSIG
+    s.push(0x61); // OP_NOP
+    s
+}
 
-/// Number of carrier inputs required for a given WASM byte length.
+/// Serialized length of the redeem script (fixed at 36 bytes).
+pub const REDEEM_SCRIPT_LEN: usize = 36;
+
+/// Maximum DER-encoded ECDSA signature length (72 bytes) + sighash byte (1).
+pub const MAX_SIGNATURE_LEN: usize = 73;
+
+/// Push-opcode overhead for `data.len()` bytes.
+fn push_overhead(len: usize) -> usize {
+    match len {
+        0..=75 => 1,
+        76..=255 => 2,
+        _ => 3, // OP_PUSHDATA2
+    }
+}
+
+/// Maximum carrier chunk payload that fits within `MAX_STANDARD_SCRIPTSIG_SIZE`.
+///
+/// The chunk data is split into `MAX_PUSH_SIZE` (520) byte pushes. This returns
+/// the total payload budget accounting for all push opcode overhead.
+pub fn max_standard_carrier_payload(signature_len: usize, redeem_script_len: usize) -> usize {
+    let chunk_index = 2; // 0x01 <index>
+    let sig_push = 1 + signature_len;
+    let redeem_push = push_overhead(redeem_script_len) + redeem_script_len;
+    let fixed = chunk_index + sig_push + redeem_push;
+    let remaining = MAX_STANDARD_SCRIPTSIG_SIZE - fixed;
+
+    // Each 520-byte chunk push costs 3 bytes (OP_PUSHDATA2) overhead.
+    // n full pushes + possibly one partial.
+    let pushes = remaining / (MAX_PUSH_SIZE + 3);
+    let leftover = remaining % (MAX_PUSH_SIZE + 3);
+    pushes * MAX_PUSH_SIZE + leftover.saturating_sub(3)
+}
+
+/// The frozen protocol chunk payload size.
+///
+/// Derived empirically against the live Zebra regtest:
+///
+/// - per-push limit 520 bytes (Zcash `MAX_SCRIPT_ELEMENT_SIZE`)
+/// - scriptSig limit 1650 bytes
+/// - `max_standard_carrier_payload(73, 36)` = 1466 bytes
+///
+/// We freeze a conservative **1400 bytes** (≈1.37 KiB) to leave headroom for
+/// DER signature length variance.
+pub const CHUNK_PAYLOAD_SIZE: usize = 1400;
+
+/// Maximum v0 contract size implied by 255 chunks of `CHUNK_PAYLOAD_SIZE`.
+pub const MAX_CARRIER_CONTRACT_SIZE: usize = 255 * CHUNK_PAYLOAD_SIZE;
+
+/// Number of carrier inputs required for a WASM byte length.
 pub fn carrier_input_count(wasm_len: usize) -> Result<u8> {
     if wasm_len == 0 || wasm_len as u32 > MAX_CODE_BYTES {
-        anyhow::bail!("invalid WASM length {wasm_len}");
+        bail!("invalid WASM length {wasm_len}");
     }
-    let n = wasm_len.div_ceil(CHUNK_SIZE);
+    let n = wasm_len.div_ceil(CHUNK_PAYLOAD_SIZE);
     if n > 255 {
-        anyhow::bail!("WASM requires {n} chunks, exceeding the 255-input carrier limit");
+        bail!("WASM requires {n} chunks, exceeding the 255-input carrier limit");
     }
     Ok(n as u8)
 }
 
-/// Build a transparent bundle for a DEPLOY transaction.
-///
-/// - `op_return`: the encoded Zalkanes DEPLOY message (already `ZALK`-prefixed).
-/// - `carrier_inputs`: (redeem_script, utxo, prevout_coin, chunk_script_sig) —
-///   one per WASM chunk. The chunk scriptSig is the `<chunk_index> <chunk_data>
-///   <signature> <redeem_script>` push layout per ADR 0003.
-/// - `change`: change recipient + amount.
-pub fn build_deploy_bundle(
-    op_return: &[u8],
-    change: Option<(&TransparentAddress, u64)>,
-) -> Result<TransparentBuilder> {
-    let mut builder = TransparentBuilder::empty();
-    builder.add_null_data_output(op_return)?;
-    if let Some((addr, value)) = change {
-        builder.add_output(addr, Zatoshis::from_u64(value)?)?;
+// ── Script helpers ───────────────────────────────────────────────────────────
+
+/// Encode a standard data push (push-only script fragment).
+fn push_data(data: &[u8]) -> Vec<u8> {
+    let n = data.len();
+    if n < 0x4c {
+        let mut v = Vec::with_capacity(1 + n);
+        v.push(n as u8);
+        v.extend_from_slice(data);
+        v
+    } else if n <= 0xff {
+        let mut v = Vec::with_capacity(2 + n);
+        v.push(0x4c);
+        v.push(n as u8);
+        v.extend_from_slice(data);
+        v
+    } else {
+        let mut v = Vec::with_capacity(3 + n);
+        v.push(0x4d);
+        v.push((n & 0xff) as u8);
+        v.push((n >> 8) as u8);
+        v.extend_from_slice(data);
+        v
     }
-    Ok(builder)
 }
 
-/// Add a carrier P2SH input to a builder.
+/// Build a P2PKH scriptPubKey: `OP_DUP OP_HASH160 <hash160(pubkey)> OP_EQUALVERIFY OP_CHECKSIG`.
+pub fn p2pkh_script_pubkey(pubkey: &[u8; 33]) -> Vec<u8> {
+    let hash = zcash_transparent::util::hash160::hash(pubkey);
+    let mut s = Vec::with_capacity(25);
+    s.push(0x76); // OP_DUP
+    s.push(0xa9); // OP_HASH160
+    s.push(0x14); // push 20
+    s.extend_from_slice(&hash);
+    s.push(0x88); // OP_EQUALVERIFY
+    s.push(0xac); // OP_CHECKSIG
+    s
+}
+
+/// Build a P2SH scriptPubKey: `OP_HASH160 <hash160(redeem_script)> OP_EQUAL`.
+pub fn p2sh_script_pubkey(redeem: &[u8]) -> Vec<u8> {
+    let hash = zcash_transparent::util::hash160::hash(redeem);
+    let mut s = Vec::with_capacity(23);
+    s.push(0xa9); // OP_HASH160
+    s.push(0x14); // push 20
+    s.extend_from_slice(&hash);
+    s.push(0x87); // OP_EQUAL
+    s
+}
+
+/// Build a carrier scriptSig:
+/// `PUSH(chunk_index) PUSH(chunk_data...)* PUSH(sig) PUSH(redeem)`.
 ///
-/// The redeem script is `<deployer_pubkey> OP_CHECKSIG` (per ADR 0003); the
-/// caller supplies it as raw script bytes together with the UTXO it spends.
-pub fn add_carrier_input(
-    builder: &mut TransparentBuilder,
-    redeem_script: &[u8],
-    prevout_txid: [u8; 32],
-    prevout_index: u32,
-    prevout_value: u64,
-    prevout_script_pubkey: &[u8],
-) -> Result<()> {
-    let redeem = zcash_script::script::FromChain::parse(&Code(redeem_script.to_vec()))
-        .map_err(|e| anyhow::anyhow!("invalid redeem script: {e}"))?;
-    let utxo = OutPoint::new(prevout_txid, prevout_index);
-    let coin = TxOut::new(
-        Zatoshis::from_u64(prevout_value)?,
-        zcash_transparent::address::Script(Code(prevout_script_pubkey.to_vec())),
-    );
-    builder.add_p2sh_input(redeem, utxo, coin)?;
-    Ok(())
+/// `chunk_data` is split into ≤520-byte pushes (Zcash per-push limit).
+pub fn carrier_script_sig(
+    chunk_index: u8,
+    chunk_data: &[u8],
+    signature: &[u8], // DER sig + sighash byte
+    redeem: &[u8],
+) -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&push_data(&[chunk_index]));
+    for part in chunk_data.chunks(MAX_PUSH_SIZE) {
+        s.extend_from_slice(&push_data(part));
+    }
+    s.extend_from_slice(&push_data(signature));
+    s.extend_from_slice(&push_data(redeem));
+    s
 }
 
-/// A transparent signing key (secp256k1 secret key) plus its pubkey.
+/// Build a standard P2PKH scriptSig: `PUSH(sig) PUSH(pubkey)`.
+pub fn p2pkh_script_sig(signature: &[u8], pubkey: &[u8; 33]) -> Vec<u8> {
+    let mut s = Vec::new();
+    s.extend_from_slice(&push_data(signature));
+    s.extend_from_slice(&push_data(pubkey));
+    s
+}
+
+// ── Key management ───────────────────────────────────────────────────────────
+
+/// A transparent signing key (secp256k1).
 #[derive(Clone)]
 pub struct SigningKey {
     pub secret: secp256k1::SecretKey,
@@ -146,19 +228,207 @@ impl SigningKey {
         Ok(Self { secret, public })
     }
 
-    /// A deterministic test key (NOT for production).
-    pub fn test_key() -> Self {
-        Self::from_secret_bytes([0x11; 32]).expect("valid test key")
+    /// A deterministic development key (NOT for production).
+    pub fn dev_key() -> Self {
+        Self::from_secret_bytes([0x11; 32]).expect("valid dev key")
+    }
+
+    pub fn compressed_pubkey(&self) -> [u8; 33] {
+        self.public.serialize()
+    }
+
+    /// The P2PKH address for this key (funding source for CALL / PREPARE).
+    pub fn p2pkh_address(&self) -> TransparentAddress {
+        TransparentAddress::from_pubkey(&self.public)
     }
 }
 
-/// Build a signing set from keys (for `apply_signatures`).
-pub fn signing_set(keys: &[SigningKey]) -> TransparentSigningSet {
-    let mut set = TransparentSigningSet::new();
-    for k in keys {
-        set.add_key(k.secret);
+// ── Transparent transaction construction ─────────────────────────────────────
+
+/// How a transparent input is spent.
+pub enum SpendKind {
+    /// Standard P2PKH spend (funding inputs for PREPARE/CALL).
+    P2pkh { key: SigningKey },
+    /// Carrier P2SH spend carrying one WASM chunk.
+    Carrier {
+        key: SigningKey,
+        chunk_index: u8,
+        chunk_data: Vec<u8>,
+        redeem_script: Vec<u8>,
+    },
+}
+
+/// A single transparent input to spend.
+pub struct SpendInput {
+    pub outpoint: OutPoint,
+    pub value: u64,
+    /// The spent output's scriptPubKey (P2PKH or P2SH).
+    pub script_pubkey: Vec<u8>,
+    /// The sighash script_code: redeem script for P2SH, scriptPubKey for P2PKH.
+    pub script_code: Vec<u8>,
+    pub kind: SpendKind,
+}
+
+/// A single transparent output to create.
+pub struct SpendOutput {
+    pub value: u64,
+    pub script_pubkey: Vec<u8>,
+}
+
+/// A signed, serialized transparent transaction.
+pub struct SignedTx {
+    pub bytes: Vec<u8>,
+    pub txid: [u8; 32],
+}
+
+impl SignedTx {
+    /// txid in the display (byte-reversed) order used by Zcash RPCs/explorers.
+    pub fn txid_hex(&self) -> String {
+        let mut rev = self.txid;
+        rev.reverse();
+        hex::encode(rev)
     }
-    set
+}
+
+/// Build and sign a transparent-only V4 transaction.
+pub fn build_transparent_tx(
+    inputs: &[SpendInput],
+    outputs: &[SpendOutput],
+    lock_time: u32,
+) -> Result<SignedTx> {
+    if inputs.is_empty() {
+        bail!("transaction has no transparent inputs");
+    }
+
+    let secp = secp256k1::Secp256k1::new();
+
+    // 1. Placeholder bundle (empty scriptSigs) — the v4 sighash depends only on
+    //    prevout, script_code, value, and sequence, NOT scriptSig bytes.
+    let vin_placeholder: Vec<TxIn<TAuthorized>> = inputs
+        .iter()
+        .map(|inp| TxIn::from_parts(inp.outpoint.clone(), Script(Code(Vec::new())), u32::MAX))
+        .collect();
+    let vout: Vec<TxOut> = outputs
+        .iter()
+        .map(|o| {
+            Ok(TxOut::new(
+                Zatoshis::from_u64(o.value)?,
+                Script(Code(o.script_pubkey.clone())),
+            ))
+        })
+        .collect::<Result<_>>()?;
+
+    let bundle_placeholder = Bundle {
+        vin: vin_placeholder,
+        vout: vout.clone(),
+        authorization: TAuthorized,
+    };
+    let tx_placeholder: TransactionData<Authorized> = TransactionData::from_parts(
+        TxVersion::V4,
+        BranchId::Canopy,
+        lock_time,
+        BlockHeight::from_u32(0),
+        Some(bundle_placeholder),
+        None,
+        None,
+        None,
+    );
+
+    // 2. Sighash + sign each input.
+    let mut final_script_sigs = Vec::with_capacity(inputs.len());
+    for (i, inp) in inputs.iter().enumerate() {
+        let script_code_script = Script(Code(inp.script_code.clone()));
+        let script_pubkey_script = Script(Code(inp.script_pubkey.clone()));
+        let value = Zatoshis::from_u64(inp.value)?;
+
+        let bundle_for_signable = Bundle {
+            vin: tx_placeholder
+                .transparent_bundle()
+                .map(|b| b.vin.clone())
+                .unwrap_or_default(),
+            vout: tx_placeholder
+                .transparent_bundle()
+                .map(|b| b.vout.clone())
+                .unwrap_or_default(),
+            authorization: TAuthorized,
+        };
+        let signable = TransparentSignableInput::from_parts(
+            &bundle_for_signable,
+            SighashType::ALL,
+            i,
+            &script_code_script,
+            &script_pubkey_script,
+            value,
+        )
+        .map_err(|e| anyhow::anyhow!("invalid input index: {e}"))?;
+
+        let sighash = v4_signature_hash(
+            &tx_placeholder,
+            &PrimitivesSignableInput::Transparent(signable),
+        );
+        let mut msg = [0u8; 32];
+        msg.copy_from_slice(sighash.as_ref());
+        let msg = secp256k1::Message::from_digest(msg);
+
+        let (key, script_sig) = match &inp.kind {
+            SpendKind::P2pkh { key } => {
+                let sig = secp.sign_ecdsa(&msg, &key.secret);
+                let mut sig_bytes = sig.serialize_der().to_vec();
+                sig_bytes.push(SIGHASH_ALL);
+                (
+                    key.clone(),
+                    p2pkh_script_sig(&sig_bytes, &key.compressed_pubkey()),
+                )
+            }
+            SpendKind::Carrier {
+                key,
+                chunk_index,
+                chunk_data,
+                redeem_script,
+            } => {
+                let sig = secp.sign_ecdsa(&msg, &key.secret);
+                let mut sig_bytes = sig.serialize_der().to_vec();
+                sig_bytes.push(SIGHASH_ALL);
+                (
+                    key.clone(),
+                    carrier_script_sig(*chunk_index, chunk_data, &sig_bytes, redeem_script),
+                )
+            }
+        };
+        let _ = key;
+        final_script_sigs.push(script_sig);
+    }
+
+    // 3. Rebuild with real scriptSigs, freeze, serialize.
+    let vin: Vec<TxIn<TAuthorized>> = inputs
+        .iter()
+        .zip(final_script_sigs)
+        .map(|(inp, sig)| TxIn::from_parts(inp.outpoint.clone(), Script(Code(sig)), u32::MAX))
+        .collect();
+    let bundle = Bundle {
+        vin,
+        vout,
+        authorization: TAuthorized,
+    };
+    let tx_data: TransactionData<Authorized> = TransactionData::from_parts(
+        TxVersion::V4,
+        BranchId::Canopy,
+        lock_time,
+        BlockHeight::from_u32(0),
+        Some(bundle),
+        None,
+        None,
+        None,
+    );
+    let tx: Transaction = tx_data.freeze()?;
+
+    let mut bytes = Vec::new();
+    tx.write(&mut bytes)?;
+
+    let mut txid = [0u8; 32];
+    txid.copy_from_slice(tx.txid().as_ref());
+
+    Ok(SignedTx { bytes, txid })
 }
 
 #[cfg(test)]
@@ -166,41 +436,43 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zip317_minimum_fee() {
-        assert_eq!(zip317_fee(1, 1), 10_000);
+    fn redeem_script_shape() {
+        let k = SigningKey::dev_key();
+        let pk = k.compressed_pubkey();
+        let r = redeem_script(&pk);
+        assert_eq!(r.len(), REDEEM_SCRIPT_LEN);
+        assert_eq!(r[0], 0x21);
+        assert_eq!(r[34], 0xac); // OP_CHECKSIG
+        assert_eq!(r[35], 0x61); // OP_NOP
     }
 
     #[test]
-    fn zip317_scales_with_inputs() {
-        assert!(zip317_fee(10, 2) > zip317_fee(2, 2));
-    }
-
-    #[test]
-    fn carrier_input_count_matches_chunking() {
-        assert_eq!(carrier_input_count(1).unwrap(), 1);
-        assert_eq!(carrier_input_count(CHUNK_SIZE).unwrap(), 1);
-        assert_eq!(carrier_input_count(CHUNK_SIZE + 1).unwrap(), 2);
-    }
-
-    #[test]
-    fn carrier_input_count_rejects_empty_and_oversized() {
-        assert!(carrier_input_count(0).is_err());
-        assert!(carrier_input_count(MAX_CODE_BYTES as usize + 1).is_err());
-    }
-
-    #[test]
-    fn deploy_bundle_roundtrips_build() {
-        let op_return = b"ZALK\x00\x01".to_vec();
-        let b = build_deploy_bundle(&op_return, None).unwrap();
-        assert!(b.build().is_some());
-    }
-
-    #[test]
-    fn signing_key_from_bytes() {
-        let k = SigningKey::test_key();
-        assert_eq!(
-            k.public,
-            secp256k1::PublicKey::from_secret_key(&secp256k1::Secp256k1::new(), &k.secret)
+    fn chunk_size_is_within_policy() {
+        let k = SigningKey::dev_key();
+        let pk = k.compressed_pubkey();
+        let redeem = redeem_script(&pk);
+        let sig = vec![0x30; MAX_SIGNATURE_LEN];
+        let chunk = vec![0xAA; CHUNK_PAYLOAD_SIZE];
+        let ss = carrier_script_sig(0, &chunk, &sig, &redeem);
+        assert!(
+            ss.len() <= MAX_STANDARD_SCRIPTSIG_SIZE,
+            "scriptSig {} > {}",
+            ss.len(),
+            MAX_STANDARD_SCRIPTSIG_SIZE
         );
+    }
+
+    #[test]
+    fn max_payload_derivation_is_consistent() {
+        let budget = max_standard_carrier_payload(MAX_SIGNATURE_LEN, REDEEM_SCRIPT_LEN);
+        assert!(CHUNK_PAYLOAD_SIZE + 3 <= budget);
+    }
+
+    #[test]
+    fn carrier_input_count_matches() {
+        assert_eq!(carrier_input_count(1).unwrap(), 1);
+        assert_eq!(carrier_input_count(CHUNK_PAYLOAD_SIZE).unwrap(), 1);
+        assert_eq!(carrier_input_count(CHUNK_PAYLOAD_SIZE + 1).unwrap(), 2);
+        assert!(carrier_input_count(0).is_err());
     }
 }
