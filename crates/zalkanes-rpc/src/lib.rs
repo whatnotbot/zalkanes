@@ -232,11 +232,16 @@ impl RpcHandler {
         }
     }
 
+    /// Look up an execution record by txid.
+    ///
+    /// Accepts the txid in display (byte-reversed) order — the same form
+    /// returned by `sendrawtransaction` and block explorers.
     pub fn get_execution(&self, txid_hex: &str) -> Option<Execution> {
-        let bytes = hex::decode(txid_hex).ok()?;
+        let mut bytes = hex::decode(txid_hex).ok()?;
         if bytes.len() != 32 {
             return None;
         }
+        bytes.reverse(); // display order → internal order
         let mut id = [0u8; 32];
         id.copy_from_slice(&bytes);
         let txid = TxId(id);
