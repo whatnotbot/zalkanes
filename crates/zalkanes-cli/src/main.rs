@@ -227,21 +227,43 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
         data_dir: dir.clone(),
     };
 
-    // Validate upstream connection + fetch initial tip.
+    // Validate upstream connection + fetch initial tip, retrying with backoff
+    // so a brief upstream outage (or Zebra still starting) does not kill the
+    // indexer. The process must stay alive and keep trying.
     {
         let s = source.clone();
-        let tip = tokio::task::spawn_blocking(move || {
-            s.validate()?;
-            s.tip()
-        })
-        .await??;
-        tracing::info!(
-            network = network.zebra_name(),
-            height = tip.height,
-            hash = %tip.hash,
-            "chain source connection verified"
-        );
-        *handler.chain_tip_handle().write().unwrap() = Some(tip);
+        let mut attempts = 0u32;
+        loop {
+            attempts += 1;
+            let s = s.clone();
+            match tokio::task::spawn_blocking(move || {
+                s.validate()?;
+                s.tip()
+            })
+            .await
+            {
+                Ok(Ok(tip)) => {
+                    tracing::info!(
+                        network = network.zebra_name(),
+                        height = tip.height,
+                        hash = %tip.hash,
+                        attempts,
+                        "chain source connection verified"
+                    );
+                    *handler.chain_tip_handle().write().unwrap() = Some(tip);
+                    break;
+                }
+                other => {
+                    let msg = match other {
+                        Ok(Ok(_)) => "unreachable".to_string(),
+                        Ok(Err(e)) => format!("{e:#}"),
+                        Err(e) => format!("{e}"),
+                    };
+                    tracing::warn!(attempts, error = %msg, "upstream not reachable; retrying");
+                    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                }
+            }
+        }
     }
 
     // Spawn the indexing loop.
