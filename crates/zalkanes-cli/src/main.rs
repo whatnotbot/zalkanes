@@ -11,7 +11,7 @@ use zalkanes_chain::{ChainSource, RpcChainSource};
 use zalkanes_core::types::{BlockHash, Network};
 use zalkanes_indexer::{process_zcash_block, IndexerConfig};
 use zalkanes_rpc::{RpcHandler, SharedState};
-use zalkanes_state::{RocksState, StateStore};
+use zalkanes_state::{BlockCommit, RocksState, StateStore};
 
 #[derive(Parser)]
 #[command(
@@ -352,6 +352,41 @@ async fn indexing_loop(
         //    chain, roll back to the common ancestor.
         handle_reorg(&source, &store).await?;
 
+        // 2.5. Fast-forward below the activation height. Pre-activation blocks
+        //    have no protocol effect (state is provably empty), so instead of
+        //    fetching and deserializing each one we seek straight to
+        //    `activation - 1` and record its canonical block hash. This is
+        //    deterministic: the state root below activation is always the empty
+        //    root, and a fresh reindex follows the identical path.
+        if let Some(act) = config.activation_height() {
+            if act > 1 {
+                let below = {
+                    let g = store.read().unwrap();
+                    g.indexed_height().is_none_or(|h| h < act - 1)
+                };
+                if below {
+                    let target = act - 1;
+                    let hash = {
+                        let s = source.clone();
+                        tokio::task::spawn_blocking(move || s.block_hash(target)).await??
+                    };
+                    let mut g = store.write().unwrap();
+                    g.commit_block(BlockCommit {
+                        height: target,
+                        zcash_block_hash: hash,
+                        deploys: Vec::new(),
+                        upserts: Vec::new(),
+                        deletes: Vec::new(),
+                    })?;
+                    tracing::info!(
+                        height = target,
+                        hash = %hash,
+                        "fast-forwarded below activation height"
+                    );
+                }
+            }
+        }
+
         // 3. Determine next height to index.
         loop {
             let indexed = {
@@ -379,6 +414,26 @@ async fn indexing_loop(
                     }
                 }
             };
+
+            // Below activation: skip the raw fetch + deserialization and commit
+            // an empty block directly (the fast path in `process_zcash_block`
+            // ignores `raw_block`). Reached only if a reorg rolls the indexer
+            // below the fast-forward point.
+            if let Some(act) = config.activation_height() {
+                if next_height < act {
+                    let result = {
+                        let mut g = store.write().unwrap();
+                        process_zcash_block(&mut **g, &config, next_height, BlockHash(hash.0), &[])
+                    };
+                    match result {
+                        Ok(_) => continue,
+                        Err(e) => {
+                            tracing::error!(height = next_height, error = %e, "block processing failed");
+                            break;
+                        }
+                    }
+                }
+            }
 
             // 4. Fetch raw block.
             let raw = {

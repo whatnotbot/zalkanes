@@ -31,7 +31,9 @@ pub struct IndexerConfig {
 }
 
 impl IndexerConfig {
-    fn activation_height(&self) -> Option<BlockHeight> {
+    /// The block height at which Zalkanes protocol interpretation begins, for
+    /// this network. `None` means never (mainnet, pre-audit).
+    pub fn activation_height(&self) -> Option<BlockHeight> {
         match self.network {
             Network::Mainnet => MAINNET_ACTIVATION_HEIGHT,
             Network::Testnet => TESTNET_ACTIVATION_HEIGHT,
@@ -68,6 +70,32 @@ pub fn process_zcash_block(
     block_hash: BlockHash,
     raw_block: &[u8],
 ) -> Result<BlockExecution> {
+    // Fast path: below the activation height a block has no protocol effect and
+    // its state is provably empty, so we skip the (expensive) librustzcash
+    // deserialization and commit an empty block that advances the indexer's
+    // position and records the canonical block hash. This is deterministic: the
+    // state root below activation is always the empty root.
+    if let Some(activation) = config.activation_height() {
+        if height < activation {
+            let root = store.commit_block(BlockCommit {
+                height,
+                zcash_block_hash: block_hash,
+                deploys: Vec::new(),
+                upserts: Vec::new(),
+                deletes: Vec::new(),
+            })?;
+            debug!(height, "below activation height; committed empty block");
+            return Ok(BlockExecution {
+                height,
+                block_hash,
+                state_root_before: root,
+                state_root_after: root,
+                executions: vec![],
+                deployed: vec![],
+            });
+        }
+    }
+
     let parsed = parse_block(raw_block, height, block_hash, config.network)?;
     process_parsed_block(store, config, parsed)
 }
@@ -102,15 +130,25 @@ pub fn process_parsed_block(
     };
 
     if parsed.height < activation {
+        // Below activation there is no protocol interpretation, but the
+        // indexer's position must still advance so it can reach the activation
+        // height. Commit an empty block (deterministic empty state root).
+        let root = store.commit_block(BlockCommit {
+            height: parsed.height,
+            zcash_block_hash: parsed.hash,
+            deploys: Vec::new(),
+            upserts: Vec::new(),
+            deletes: Vec::new(),
+        })?;
         debug!(
             height = parsed.height,
-            "below activation height; skipping block"
+            "below activation height; committing empty block"
         );
         return Ok(BlockExecution {
             height: parsed.height,
             block_hash: parsed.hash,
-            state_root_before: store.compute_root(),
-            state_root_after: store.compute_root(),
+            state_root_before: root,
+            state_root_after: root,
             executions: vec![],
             deployed: vec![],
         });
