@@ -39,9 +39,30 @@ Last reviewed: 2025-09-10
 | zcash_primitives    | 0.30.1    | yes               | transaction types / data structures  |
 | zcash_protocol      | 0.10.6    | yes               | network constants / note encoding    |
 | zcash_transparent   | 0.10.0    | yes               | transparent script / UTXO types      |
-| zcash_address       | 0.6.0     | no                | address encoding only                |
+| zcash_address       | 0.13.0    | no                | address encoding only                |
 
 Repository: zcash/librustzcash
+
+### V4 transparent sighash branch id (consensus-critical)
+
+Zalkanes signs transparent-only **V4** transactions with the legacy ZIP-243
+sighash. The sighash personalization embeds a **consensus branch id**, and the
+validator recomputes that same id from the *network upgrade active at the
+spending height* (Zebra reads a V4 transaction with
+`NetworkUpgrade::current(network, height).branch_id()`).
+
+Therefore the branch id is **per-network and height-dependent**, not a constant:
+
+| Network          | Branch id   | Upgrade    |
+|------------------|-------------|------------|
+| regtest (Zebra)  | `0xE9FF75A6`| Canopy     |
+| testnet (current)| `0x37A5165B`| Nu6.3      |
+| mainnet          | *(unset)*   | pre-audit  |
+
+`zalkanes-tx::branch_id_for_network` pins this mapping and is exercised by the
+testnet acceptance evidence. Signing with the wrong branch id makes every
+transparent signature invalid under consensus. Testnet tip (2026-09-10) is
+~4,338,009 blocks, past the Nu6.3 activation height 4,134,000.
 
 ---
 
