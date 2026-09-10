@@ -95,9 +95,16 @@ pub enum ParseError {
 /// skip). Returns `Err` if the magic matches but the message is malformed
 /// (should be logged and counted as a protocol violation).
 pub fn parse_op_return(payload: &[u8]) -> Result<Option<Message>, ParseError> {
-    // Must have at least magic (4) + version (1) + type (1) = 6 bytes.
+    // Empty payload: silent skip.
+    if payload.is_empty() {
+        return Ok(None);
+    }
+    // Shorter than magic (4) + version (1) + type (1) = 6 bytes: a prefix of the
+    // magic (or magic + partial header) is a truncated message; anything else is
+    // a silent skip.
     if payload.len() < 6 {
-        if payload.starts_with(&PROTOCOL_MAGIC[..payload.len().min(4)]) && payload.len() < 4 {
+        let magic_prefix = &PROTOCOL_MAGIC[..payload.len().min(PROTOCOL_MAGIC.len())];
+        if payload.starts_with(magic_prefix) {
             return Err(ParseError::Truncated);
         }
         return Ok(None);
