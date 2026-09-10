@@ -139,8 +139,10 @@ pub fn max_standard_carrier_payload(signature_len: usize, redeem_script_len: usi
 /// DER signature length variance.
 pub const CHUNK_PAYLOAD_SIZE: usize = 1400;
 
-/// Maximum v0 contract size implied by 255 chunks of `CHUNK_PAYLOAD_SIZE`.
-pub const MAX_CARRIER_CONTRACT_SIZE: usize = 255 * CHUNK_PAYLOAD_SIZE;
+/// Maximum v0 contract size implied by `MAX_CHUNKS` chunks of
+/// `CHUNK_PAYLOAD_SIZE`. Must be ≥ [`MAX_CODE_BYTES`].
+pub const MAX_CARRIER_CONTRACT_SIZE: usize =
+    zalkanes_core::consensus::MAX_CHUNKS as usize * CHUNK_PAYLOAD_SIZE;
 
 /// Number of carrier inputs required for a WASM byte length.
 pub fn carrier_input_count(wasm_len: usize) -> Result<u8> {
@@ -148,8 +150,11 @@ pub fn carrier_input_count(wasm_len: usize) -> Result<u8> {
         bail!("invalid WASM length {wasm_len}");
     }
     let n = wasm_len.div_ceil(CHUNK_PAYLOAD_SIZE);
-    if n > 255 {
-        bail!("WASM requires {n} chunks, exceeding the 255-input carrier limit");
+    if n > zalkanes_core::consensus::MAX_CHUNKS as usize {
+        bail!(
+            "WASM requires {n} chunks, exceeding the {}-chunk carrier limit",
+            zalkanes_core::consensus::MAX_CHUNKS
+        );
     }
     Ok(n as u8)
 }

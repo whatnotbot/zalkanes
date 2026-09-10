@@ -7,7 +7,18 @@
 // ── WASM module limits ───────────────────────────────────────────────────────
 
 /// Maximum WASM bytecode size for a deployed contract.
-pub const MAX_CODE_BYTES: u32 = 512 * 1024; // 512 KiB
+///
+/// 256 KiB (262,144 bytes). This is the largest size representable by the
+/// carrier: `MAX_CHUNKS (188) × CHUNK_PAYLOAD_SIZE (1400) = 263,200 ≥ 262,144`,
+/// and `chunk_index`/`chunk_count` are `u8`. 256 KiB has been empirically
+/// relayed on live Zebra. A 512 KiB constant would NOT be encodable (255 × 1400
+/// = 357,000 < 524,288), so it must not be used.
+pub const MAX_CODE_BYTES: u32 = 262_144; // 256 KiB
+
+/// Maximum number of carrier chunks for one contract.
+///
+/// `ceil(MAX_CODE_BYTES / CHUNK_PAYLOAD_SIZE) = ceil(262144 / 1400) = 188`.
+pub const MAX_CHUNKS: u8 = 188;
 
 /// Maximum WASM linear memory pages (1 page = 64 KiB).
 pub const MAX_LINEAR_MEMORY_PAGES: u32 = 256; // 16 MiB
