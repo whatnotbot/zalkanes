@@ -59,7 +59,7 @@ sha2           = { version = "=0.10.8" }
 hex            = { version = "=0.4.3" }
 
 # Async / RPC
-tokio          = { version = "=1.40.0", features = ["full"] }
+tokio          = { version = "=1.44.2", features = ["full"] }
 jsonrpsee      = { version = "=0.24.3", features = ["server", "client"] }
 reqwest        = { version = "=0.12.7", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
@@ -67,12 +67,12 @@ reqwest        = { version = "=0.12.7", default-features = false, features = ["j
 clap = { version = "=4.5.18", features = ["derive", "env"] }
 
 # Logging / metrics
-tracing            = { version = "=0.1.40" }
-tracing-subscriber = { version = "=0.3.18", features = ["env-filter"] }
+tracing            = { version = "=0.1.44" }
+tracing-subscriber = { version = "=0.3.23", features = ["env-filter"] }
 prometheus         = { version = "=0.13.4" }
 
 # Error handling
-anyhow    = { version = "=1.0.89" }
+anyhow    = { version = "=1.0.104" }
 thiserror = { version = "=1.0.64" }
 
 # Testing / fuzzing

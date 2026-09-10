@@ -8,6 +8,17 @@ Last reviewed: 2025-09-10
 
 ---
 
+## Rust toolchain
+
+| Field          | Value                                      |
+|----------------|--------------------------------------------|
+| **Rust**       | **1.88.0**                                 |
+| Pinned via     | `rust-toolchain.toml` (`channel = "1.88.0"`), `Cargo.toml` `rust-version`, Dockerfile `rust:1.88-slim-bookworm`, GitHub Actions `toolchain: 1.88.0` |
+| Rationale      | transitive `icu_*` crates (via reqwest/jsonrpsee) require rustc ≥ 1.88 |
+| Consensus-critical | no (toolchain only)                     |
+
+---
+
 ## Zcash consensus node
 
 | Field                  | Value                                          |

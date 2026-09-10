@@ -39,7 +39,7 @@ See [docs/upstream-lock.md](docs/upstream-lock.md) for pinned dependency version
 
 ## Prerequisites
 
-- Rust 1.86 (pinned via `rust-toolchain.toml`)
+- Rust 1.88 (pinned via `rust-toolchain.toml`)
 - A locally synced Zebra node (default RPC: `http://127.0.0.1:8232`)
 - Docker + Docker Compose (for regtest)
 

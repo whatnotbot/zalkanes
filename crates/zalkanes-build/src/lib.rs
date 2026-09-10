@@ -28,7 +28,7 @@ pub fn build_contract(manifest_path: &Path) -> Result<PathBuf> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("cargo build failed:\n{}", stderr);
+        bail!("cargo build failed:\n{stderr}");
     }
 
     // Find the .wasm in target/wasm32-unknown-unknown/release/

@@ -58,7 +58,7 @@ impl TestChain {
     /// Deploy a WASM contract through the REAL block processor.
     pub fn deploy(&mut self, wasm: &[u8]) -> Result<ContractId> {
         zalkanes_runtime::validate_module(wasm)
-            .map_err(|e| anyhow::anyhow!("WASM validation failed: {}", e))?;
+            .map_err(|e| anyhow::anyhow!("WASM validation failed: {e}"))?;
 
         let code_hash = CodeHash::of(wasm);
         let txid = synthetic_txid(self.height, 0);
@@ -163,9 +163,9 @@ impl TestChain {
         };
         match execute(ctx, &self.state) {
             CallResult::Success { output, .. } => Ok(output),
-            CallResult::Trap { reason, .. } => bail!("view trapped: {}", reason),
+            CallResult::Trap { reason, .. } => bail!("view trapped: {reason}"),
             CallResult::FuelExhausted { .. } => bail!("view fuel exhausted"),
-            CallResult::InvalidModule { reason } => bail!("invalid module: {}", reason),
+            CallResult::InvalidModule { reason } => bail!("invalid module: {reason}"),
             CallResult::ContractNotFound => bail!("contract not found"),
         }
     }
