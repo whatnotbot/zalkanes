@@ -147,15 +147,7 @@ async fn main() -> Result<()> {
 // ── Config ───────────────────────────────────────────────────────────────────
 
 fn chain_config() -> Result<(Network, String, Option<String>)> {
-    let network = match std::env::var("ZALKANES_NETWORK")
-        .unwrap_or_else(|_| "regtest".to_string())
-        .as_str()
-    {
-        "mainnet" | "main" => Network::Mainnet,
-        "testnet" | "test" => Network::Testnet,
-        "regtest" => Network::Regtest,
-        other => bail!("unknown ZALKANES_NETWORK: {other}"),
-    };
+    let network = network_from_env()?;
 
     let rpc_url = std::env::var("ZALKANES_RPC_URL")
         .context("ZALKANES_RPC_URL not set (e.g. http://127.0.0.1:18232 for Zebra)")?;
@@ -163,6 +155,19 @@ fn chain_config() -> Result<(Network, String, Option<String>)> {
     let api_key = std::env::var("ZALKANES_RPC_API_KEY").ok();
 
     Ok((network, rpc_url, api_key))
+}
+
+/// Parse the Zalkanes network from `ZALKANES_NETWORK` (defaults to regtest).
+fn network_from_env() -> Result<Network> {
+    match std::env::var("ZALKANES_NETWORK")
+        .unwrap_or_else(|_| "regtest".to_string())
+        .as_str()
+    {
+        "mainnet" | "main" => Ok(Network::Mainnet),
+        "testnet" | "test" => Ok(Network::Testnet),
+        "regtest" => Ok(Network::Regtest),
+        other => bail!("unknown ZALKANES_NETWORK: {other}"),
+    }
 }
 
 fn build_source(network: Network, rpc_url: &str, api_key: Option<&str>) -> Result<RpcChainSource> {
@@ -505,16 +510,105 @@ fn signing_key() -> Result<zalkanes_tx::SigningKey> {
     }
 }
 
-fn funding_address(key: &zalkanes_tx::SigningKey) -> String {
+fn funding_address(key: &zalkanes_tx::SigningKey, network: Network) -> String {
+    use zcash_protocol::consensus::NetworkType;
+    let network_type = match network {
+        Network::Mainnet => NetworkType::Main,
+        Network::Testnet => NetworkType::Test,
+        Network::Regtest => NetworkType::Regtest,
+    };
     key.p2pkh_address()
-        .to_zcash_address(zcash_protocol::consensus::NetworkType::Regtest)
+        .to_zcash_address(network_type)
         .to_string()
 }
 
+/// The consensus branch ID for signing V4 transparent transactions on `network`.
+fn network_branch_id(network: Network) -> Result<zcash_protocol::consensus::BranchId> {
+    zalkanes_tx::branch_id_for_network(network)
+}
+
+/// Obtain a spendable funding UTXO for `addr`.
+///
+/// - Regtest: mine 110 blocks (coinbase maturity) and scan for a mature coinbase
+///   output paying `addr`.
+/// - Testnet: read `ZALKANES_FUNDING_TXID` + `ZALKANES_FUNDING_VOUT` and look the
+///   output amount up from the node (funds arrive from an external faucet).
+fn obtain_funding_utxo(
+    rpc: &rpc::ZcashRpc,
+    addr: &str,
+    network: Network,
+) -> Result<(zcash_transparent::bundle::OutPoint, u64)> {
+    match network {
+        Network::Regtest => {
+            let blocks = rpc.generate_to_address(110, addr)?;
+            rpc::find_mature_utxo(rpc, addr, &blocks)
+        }
+        Network::Testnet => {
+            let txid = std::env::var("ZALKANES_FUNDING_TXID")
+                .context("ZALKANES_FUNDING_TXID not set (testnet faucet txid)")?;
+            let vout = std::env::var("ZALKANES_FUNDING_VOUT")
+                .unwrap_or_else(|_| "0".to_string())
+                .parse::<u32>()
+                .context("ZALKANES_FUNDING_VOUT must be a vout index")?;
+            let tx = rpc.get_raw_transaction(&txid, 1)?;
+            let vouts = tx["vout"]
+                .as_array()
+                .context("funding tx has no vout array")?;
+            let entry = vouts
+                .get(vout as usize)
+                .with_context(|| format!("funding tx has no vout {vout}"))?;
+            let value = entry["valueZat"]
+                .as_u64()
+                .context("funding vout missing valueZat")?;
+            let pays_us = entry["scriptPubKey"]["addresses"]
+                .as_array()
+                .map(|a| a.iter().any(|x| x.as_str() == Some(addr)))
+                .unwrap_or(false);
+            if !pays_us {
+                bail!("funding tx vout {vout} does not pay {addr}");
+            }
+            let outpoint =
+                zcash_transparent::bundle::OutPoint::new(rpc::rpc_txid_to_internal(&txid)?, vout);
+            Ok((outpoint, value))
+        }
+        Network::Mainnet => bail!("mainnet activation is not set (pre-audit)"),
+    }
+}
+
+/// Get `txid` mined and return its block height.
+///
+/// - Regtest: mine one block (internal miner).
+/// - Testnet: poll `getrawtransaction` until the tx has ≥1 confirmation.
+async fn confirm_tx(rpc: &rpc::ZcashRpc, txid: &str, addr: &str, network: Network) -> Result<u64> {
+    match network {
+        Network::Regtest => {
+            let blocks = rpc.generate_to_address(1, addr)?;
+            let block_hash = blocks.into_iter().next().context("no block mined")?;
+            let block_json = rpc.get_block(&block_hash, 1)?;
+            Ok(block_json["height"].as_u64().unwrap_or(0))
+        }
+        Network::Testnet => loop {
+            let tx = rpc.get_raw_transaction(txid, 1)?;
+            if tx["confirmations"].as_u64().unwrap_or(0) >= 1 {
+                return Ok(tx["height"].as_u64().unwrap_or(0));
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(15)).await;
+        },
+        Network::Mainnet => bail!("mainnet activation is not set (pre-audit)"),
+    }
+}
+
 async fn contract_fund(blocks: u32) -> Result<()> {
+    let network = network_from_env()?;
+    if network != Network::Regtest {
+        bail!(
+            "contract fund only mines blocks on regtest; on {} obtain funds from a faucet",
+            network.zebra_name()
+        );
+    }
     let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
     let key = signing_key()?;
-    let addr = funding_address(&key);
+    let addr = funding_address(&key, network);
     let mined = rpc.generate_to_address(blocks, &addr)?;
     println!("mined {blocks} blocks to {addr}");
     println!(
@@ -525,9 +619,11 @@ async fn contract_fund(blocks: u32) -> Result<()> {
 }
 
 async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
+    let network = network_from_env()?;
+    let branch_id = network_branch_id(network)?;
     let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
     let key = signing_key()?;
-    let addr = funding_address(&key);
+    let addr = funding_address(&key, network);
 
     // Read + validate the WASM.
     let wasm = std::fs::read(wasm_path).with_context(|| format!("read {wasm_path}"))?;
@@ -542,16 +638,24 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
     let chunk_count = chunks.len() as u8;
     println!("chunks: {chunk_count}");
 
-    // PREPARE: fund `chunk_count` carrier UTXOs.
-    let funding_blocks = rpc.generate_to_address(110, &addr)?;
-    let (funding_outpoint, funding_value) = rpc::find_mature_utxo(&rpc, &addr, &funding_blocks)?;
+    // PREPARE: obtain a funding UTXO and create `chunk_count` carrier UTXOs.
+    let (funding_outpoint, funding_value) = obtain_funding_utxo(&rpc, &addr, network)?;
+    println!(
+        "funding UTXO: {} zat (outpoint vout {})",
+        funding_value,
+        funding_outpoint.n()
+    );
 
     // Each carrier UTXO needs enough value to later pay its share of the DEPLOY
     // fee; fund each with 1_000_000 zatoshi.
     let carrier_value = 1_000_000u64;
     let carrier_values = vec![carrier_value; chunk_count as usize];
-    let prepare =
-        zalkanes_tx::build_prepare(&key, &[(funding_outpoint, funding_value)], &carrier_values)?;
+    let prepare = zalkanes_tx::build_prepare(
+        &key,
+        &[(funding_outpoint, funding_value)],
+        &carrier_values,
+        branch_id,
+    )?;
     let prepare_txid = prepare.txid_hex();
     let accepted = rpc.send_raw_transaction(&hex::encode(&prepare.bytes))?;
     if accepted != prepare_txid {
@@ -559,11 +663,7 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
     }
     println!("prepare_txid: {prepare_txid}");
 
-    // Mine PREPARE.
-    let prepare_block = rpc.generate_to_address(1, &addr)?;
-    let prepare_block_hash = prepare_block[0].clone();
-    let prepare_block_json = rpc.get_block(&prepare_block_hash, 1)?;
-    let prepare_height = prepare_block_json["height"].as_u64().unwrap_or(0);
+    let prepare_height = confirm_tx(&rpc, &prepare_txid, &addr, network).await?;
     println!("prepare_block_height: {prepare_height}");
 
     // Build the DEPLOY OP_RETURN message.
@@ -590,6 +690,7 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
         &carrier_values,
         &chunks,
         &op_return,
+        branch_id,
     )?;
     let deploy_txid = deploy.txid_hex();
     let accepted = rpc.send_raw_transaction(&hex::encode(&deploy.bytes))?;
@@ -598,17 +699,13 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
     }
     println!("deploy_txid: {deploy_txid}");
 
-    // Mine DEPLOY.
-    let deploy_block = rpc.generate_to_address(1, &addr)?;
-    let deploy_block_hash = deploy_block[0].clone();
-    let deploy_block_json = rpc.get_block(&deploy_block_hash, 1)?;
-    let deploy_height = deploy_block_json["height"].as_u64().unwrap_or(0);
+    let deploy_height = confirm_tx(&rpc, &deploy_txid, &addr, network).await?;
     println!("deploy_block_height: {deploy_height}");
 
     // Compute the deterministic ContractId (must match the indexer's).
     let txid_internal = rpc::rpc_txid_to_internal(&deploy_txid)?;
     let contract_id = zalkanes_core::types::ContractId::derive(
-        Network::Regtest,
+        network,
         &zalkanes_core::types::TxId(txid_internal),
         0,
         &code_hash,
@@ -624,9 +721,11 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
 }
 
 async fn contract_call(contract_id: &str, opcode: u16, input_hex: &str, wait: bool) -> Result<()> {
+    let network = network_from_env()?;
+    let branch_id = network_branch_id(network)?;
     let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
     let key = signing_key()?;
-    let addr = funding_address(&key);
+    let addr = funding_address(&key, network);
 
     let cid = hex::decode(contract_id).context("contract_id hex")?;
     if cid.len() != 32 {
@@ -646,10 +745,10 @@ async fn contract_call(contract_id: &str, opcode: u16, input_hex: &str, wait: bo
     let op_return = zalkanes_protocol::encode_call(&call_msg);
 
     // Spend a fresh mature funding UTXO.
-    let funding_blocks = rpc.generate_to_address(110, &addr)?;
-    let (funding_outpoint, funding_value) = rpc::find_mature_utxo(&rpc, &addr, &funding_blocks)?;
+    let (funding_outpoint, funding_value) = obtain_funding_utxo(&rpc, &addr, network)?;
 
-    let call = zalkanes_tx::build_call(&key, funding_outpoint, funding_value, &op_return)?;
+    let call =
+        zalkanes_tx::build_call(&key, funding_outpoint, funding_value, &op_return, branch_id)?;
     let txid = call.txid_hex();
     let accepted = rpc.send_raw_transaction(&hex::encode(&call.bytes))?;
     if accepted != txid {
@@ -657,10 +756,7 @@ async fn contract_call(contract_id: &str, opcode: u16, input_hex: &str, wait: bo
     }
     println!("txid: {txid}");
 
-    let block = rpc.generate_to_address(1, &addr)?;
-    let block_hash = block[0].clone();
-    let block_json = rpc.get_block(&block_hash, 1)?;
-    let height = block_json["height"].as_u64().unwrap_or(0);
+    let height = confirm_tx(&rpc, &txid, &addr, network).await?;
     println!("block_height: {height}");
 
     if wait {

@@ -20,7 +20,10 @@ use zalkanes_tx::{
     MAX_SIGNATURE_LEN,
 };
 use zcash_primitives::transaction::Transaction;
-use zcash_protocol::{consensus::BlockHeight, value::Zatoshis};
+use zcash_protocol::{
+    consensus::{BlockHeight, BranchId},
+    value::Zatoshis,
+};
 use zcash_transparent::bundle::{OutPoint, TxOut};
 
 struct Rpc {
@@ -186,6 +189,7 @@ fn main() -> Result<()> {
             },
         ],
         0,
+        BranchId::Canopy,
     )?;
     let prepare_txid_display = prepare.txid_hex();
     println!("PREPARE txid: {prepare_txid_display}");
@@ -230,6 +234,7 @@ fn main() -> Result<()> {
             },
         ],
         0,
+        BranchId::Canopy,
     )?;
     let deploy_txid_display = deploy.txid_hex();
     println!("DEPLOY txid: {deploy_txid_display}");

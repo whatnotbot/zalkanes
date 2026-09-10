@@ -13,7 +13,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{bail, Result};
-use zalkanes_core::consensus::MAX_CODE_BYTES;
+use zalkanes_core::{consensus::MAX_CODE_BYTES, types::Network};
 use zcash_primitives::transaction::{
     sighash::SignableInput as PrimitivesSignableInput, sighash_v4::v4_signature_hash, Authorized,
     Transaction, TransactionData, TxVersion,
@@ -318,11 +318,32 @@ impl SignedTx {
     }
 }
 
+/// The consensus branch ID to use for V4 transparent transaction signing.
+///
+/// V4 transactions are signed with the ZIP-243 sighash, whose personalization
+/// embeds the branch ID of the network upgrade active at the signing height
+/// (see Zebra's `Transaction::to_librustzcash`, which reads a V4 transaction
+/// with `NetworkUpgrade::current(network, height).branch_id()`). Signing with
+/// the wrong branch ID makes the transaction invalid under consensus.
+///
+/// This mapping is consensus-critical and pinned to the current milestone:
+/// - Regtest → Canopy (Zebra's regtest chain stops activating upgrades at Canopy).
+/// - Testnet → Nu6.3 (testnet tip is past the Nu6.3 activation height 4,134,000).
+/// - Mainnet → refused (mainnet activation is `None` pre-audit).
+pub fn branch_id_for_network(network: Network) -> Result<BranchId> {
+    match network {
+        Network::Regtest => Ok(BranchId::Canopy),
+        Network::Testnet => Ok(BranchId::Nu6_3),
+        Network::Mainnet => bail!("mainnet activation is not set (pre-audit)"),
+    }
+}
+
 /// Build and sign a transparent-only V4 transaction.
 pub fn build_transparent_tx(
     inputs: &[SpendInput],
     outputs: &[SpendOutput],
     lock_time: u32,
+    branch_id: BranchId,
 ) -> Result<SignedTx> {
     if inputs.is_empty() {
         bail!("transaction has no transparent inputs");
@@ -353,7 +374,7 @@ pub fn build_transparent_tx(
     };
     let tx_placeholder: TransactionData<Authorized> = TransactionData::from_parts(
         TxVersion::V4,
-        BranchId::Canopy,
+        branch_id,
         lock_time,
         BlockHeight::from_u32(0),
         Some(bundle_placeholder),
@@ -440,7 +461,7 @@ pub fn build_transparent_tx(
     };
     let tx_data: TransactionData<Authorized> = TransactionData::from_parts(
         TxVersion::V4,
-        BranchId::Canopy,
+        branch_id,
         lock_time,
         BlockHeight::from_u32(0),
         Some(bundle),
@@ -519,6 +540,7 @@ pub fn build_prepare(
     funding_key: &SigningKey,
     funding_utxos: &[(OutPoint, u64)],
     carrier_values: &[u64],
+    branch_id: BranchId,
 ) -> Result<SignedTx> {
     if funding_utxos.is_empty() {
         bail!("no funding UTXOs");
@@ -573,7 +595,7 @@ pub fn build_prepare(
         })
         .collect();
 
-    build_transparent_tx(&inputs, &outputs, 0)
+    build_transparent_tx(&inputs, &outputs, 0, branch_id)
 }
 
 /// Build the DEPLOY transaction: spend N carrier UTXOs with WASM chunks in the
@@ -585,6 +607,7 @@ pub fn build_deploy(
     carrier_values: &[u64],
     chunks: &[Vec<u8>],
     op_return: &[u8],
+    branch_id: BranchId,
 ) -> Result<SignedTx> {
     if carrier_outpoints.len() != chunks.len() || carrier_outpoints.len() != carrier_values.len() {
         bail!("carrier outpoints/values/chunks length mismatch");
@@ -640,7 +663,7 @@ pub fn build_deploy(
         });
     }
 
-    build_transparent_tx(&inputs, &outputs, 0)
+    build_transparent_tx(&inputs, &outputs, 0, branch_id)
 }
 
 /// Build a CALL transaction: spend one P2PKH funding UTXO, emit an OP_RETURN
@@ -650,6 +673,7 @@ pub fn build_call(
     funding_outpoint: OutPoint,
     funding_value: u64,
     op_return: &[u8],
+    branch_id: BranchId,
 ) -> Result<SignedTx> {
     let pubkey = funding_key.compressed_pubkey();
     let op_return = op_return_script(op_return);
@@ -683,6 +707,7 @@ pub fn build_call(
             },
         ],
         0,
+        branch_id,
     )
 }
 

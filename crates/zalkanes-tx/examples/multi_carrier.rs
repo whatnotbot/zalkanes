@@ -5,6 +5,7 @@
 use anyhow::{bail, Context, Result};
 use serde_json::Value;
 use zalkanes_tx::{build_deploy, build_prepare, op_return_script, split_chunks, SigningKey};
+use zcash_protocol::consensus::BranchId;
 use zcash_transparent::bundle::OutPoint;
 
 struct Rpc {
@@ -117,7 +118,7 @@ fn main() -> Result<()> {
     // of the DEPLOY fee + dust threshold. Use 100_000 zatoshi per carrier.
     let carrier_val = 100_000u64;
     let values = vec![carrier_val; n];
-    let prepare = build_prepare(&key, &funding, &values)?;
+    let prepare = build_prepare(&key, &funding, &values, BranchId::Canopy)?;
     let prepare_txid = prepare.txid_hex();
     assert_eq!(rpc.send(&hex::encode(&prepare.bytes))?, prepare_txid);
     let pb = rpc.generate(1, &addr)?;
@@ -137,7 +138,14 @@ fn main() -> Result<()> {
         ));
     }
     let op_return = op_return_script(b"ZALK");
-    let deploy = build_deploy(&key, &outpoints, &values, &chunks, &op_return)?;
+    let deploy = build_deploy(
+        &key,
+        &outpoints,
+        &values,
+        &chunks,
+        &op_return,
+        BranchId::Canopy,
+    )?;
     let deploy_txid = deploy.txid_hex();
     assert_eq!(rpc.send(&hex::encode(&deploy.bytes))?, deploy_txid);
     let db = rpc.generate(1, &addr)?;
