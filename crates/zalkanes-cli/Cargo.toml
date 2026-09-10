@@ -16,6 +16,9 @@ zalkanes-rpc     = { workspace = true }
 zalkanes-tx      = { workspace = true }
 zalkanes-build   = { workspace = true }
 zalkanes-state   = { workspace = true }
+zalkanes-protocol = { workspace = true }
+zalkanes-runtime = { workspace = true }
+zalkanes-carrier = { workspace = true }
 anyhow           = { workspace = true }
 tokio            = { workspace = true }
 clap             = { workspace = true }
@@ -24,3 +27,6 @@ tracing-subscriber = { workspace = true }
 serde_json       = { workspace = true }
 hex              = { workspace = true }
 reqwest          = { workspace = true }
+zcash_transparent = { workspace = true }
+zcash_protocol   = { workspace = true }
+sha2             = { workspace = true }

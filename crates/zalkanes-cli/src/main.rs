@@ -2,6 +2,8 @@
 
 #![forbid(unsafe_code)]
 
+mod rpc;
+
 use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::sync::{Arc, RwLock};
@@ -62,14 +64,28 @@ enum ContractCmd {
         #[arg(long, default_value = "./contracts/counter")]
         manifest_path: String,
     },
+    /// Mine blocks to the dev funding address (regtest)
+    Fund {
+        /// Number of blocks to mine (default 110 for coinbase maturity)
+        #[arg(long, default_value = "110")]
+        blocks: u32,
+    },
     /// Deploy a compiled WASM contract via a real Zcash transaction
-    Deploy { wasm_path: String },
+    Deploy {
+        wasm_path: String,
+        /// Wait for Zalkanes to index the deployment
+        #[arg(long)]
+        wait: bool,
+    },
     /// Call a contract method via a real Zcash transaction
     Call {
         contract_id: String,
         opcode: u16,
         #[arg(default_value = "")]
         input_hex: String,
+        /// Wait for Zalkanes to index the call
+        #[arg(long)]
+        wait: bool,
     },
     /// View (read-only call) a contract method against a live node
     View {
@@ -102,12 +118,14 @@ async fn main() -> Result<()> {
 
         Commands::Contract { cmd } => match cmd {
             ContractCmd::Build { manifest_path } => contract_build(&manifest_path),
-            ContractCmd::Deploy { wasm_path } => contract_deploy(&wasm_path).await,
+            ContractCmd::Fund { blocks } => contract_fund(blocks).await,
+            ContractCmd::Deploy { wasm_path, wait } => contract_deploy(&wasm_path, wait).await,
             ContractCmd::Call {
                 contract_id,
                 opcode,
                 input_hex,
-            } => contract_call(&contract_id, opcode, &input_hex).await,
+                wait,
+            } => contract_call(&contract_id, opcode, &input_hex, wait).await,
             ContractCmd::View {
                 contract_id,
                 opcode,
@@ -460,23 +478,268 @@ fn contract_build(manifest_path: &str) -> Result<()> {
     Ok(())
 }
 
-// ── contract deploy / call / view ────────────────────────────────────────────
+// ── contract deploy / call / view / fund ─────────────────────────────────────
 //
-// deploy/call broadcast real Zcash transactions. Transaction construction and
-// signing live in `zalkanes-tx`; these commands wire them to a Zebra RPC and
-// to the Zalkanes indexer (see `docs/architecture.md`).
+// deploy/call broadcast REAL signed Zcash transactions against our Zebra node.
+// The blockchain is the only state-mutating path.
 
-async fn contract_deploy(wasm_path: &str) -> Result<()> {
-    println!("Deploying: {wasm_path}");
-    println!("NOTE: transaction construction + signing implemented in zalkanes-tx.");
-    println!("(Wire to a Zebra RPC + wallet key via env; see docs/tx.md)");
+/// Zebra RPC URL for broadcast/funding (env `ZALKANES_ZCASH_RPC_URL`).
+fn zcash_rpc_url() -> Result<String> {
+    std::env::var("ZALKANES_ZCASH_RPC_URL").context("ZALKANES_ZCASH_RPC_URL not set")
+}
+
+/// The signing key (env `ZALKANES_SIGNING_KEY` as 64-char hex, or a dev default).
+fn signing_key() -> Result<zalkanes_tx::SigningKey> {
+    match std::env::var("ZALKANES_SIGNING_KEY") {
+        Ok(hex) => {
+            let bytes = hex::decode(hex).context("decode ZALKANES_SIGNING_KEY hex")?;
+            let arr: [u8; 32] = bytes
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("signing key must be 32 bytes"))?;
+            zalkanes_tx::SigningKey::from_secret_bytes(arr)
+        }
+        Err(_) => {
+            eprintln!("WARNING: using deterministic dev signing key (regtest only)");
+            Ok(zalkanes_tx::SigningKey::dev_key())
+        }
+    }
+}
+
+fn funding_address(key: &zalkanes_tx::SigningKey) -> String {
+    key.p2pkh_address()
+        .to_zcash_address(zcash_protocol::consensus::NetworkType::Regtest)
+        .to_string()
+}
+
+async fn contract_fund(blocks: u32) -> Result<()> {
+    let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
+    let key = signing_key()?;
+    let addr = funding_address(&key);
+    let mined = rpc.generate_to_address(blocks, &addr)?;
+    println!("mined {blocks} blocks to {addr}");
+    println!(
+        "latest block: {}",
+        mined.last().map(String::as_str).unwrap_or("")
+    );
     Ok(())
 }
 
-async fn contract_call(contract_id: &str, opcode: u16, input_hex: &str) -> Result<()> {
-    println!("Calling contract {contract_id} opcode={opcode} input={input_hex}");
-    println!("NOTE: transaction construction + signing implemented in zalkanes-tx.");
+async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
+    let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
+    let key = signing_key()?;
+    let addr = funding_address(&key);
+
+    // Read + validate the WASM.
+    let wasm = std::fs::read(wasm_path).with_context(|| format!("read {wasm_path}"))?;
+    zalkanes_runtime::validate_module(&wasm)
+        .map_err(|e| anyhow::anyhow!("WASM validation: {e}"))?;
+
+    let code_hash = zalkanes_core::types::CodeHash::of(&wasm);
+    println!("code_hash: {}", code_hash.as_hex());
+
+    // Split into chunks and compute carrier counts.
+    let chunks = zalkanes_tx::split_chunks(&wasm)?;
+    let chunk_count = chunks.len() as u8;
+    println!("chunks: {chunk_count}");
+
+    // PREPARE: fund `chunk_count` carrier UTXOs.
+    let funding_blocks = rpc.generate_to_address(110, &addr)?;
+    let (funding_outpoint, funding_value) = rpc::find_mature_utxo(&rpc, &addr, &funding_blocks)?;
+
+    // Each carrier UTXO needs enough value to later pay its share of the DEPLOY
+    // fee; fund each with 1_000_000 zatoshi.
+    let carrier_value = 1_000_000u64;
+    let carrier_values = vec![carrier_value; chunk_count as usize];
+    let prepare =
+        zalkanes_tx::build_prepare(&key, funding_outpoint, funding_value, &carrier_values)?;
+    let prepare_txid = prepare.txid_hex();
+    let accepted = rpc.send_raw_transaction(&hex::encode(&prepare.bytes))?;
+    if accepted != prepare_txid {
+        bail!("PREPARE txid mismatch: sent {accepted} != expected {prepare_txid}");
+    }
+    println!("prepare_txid: {prepare_txid}");
+
+    // Mine PREPARE.
+    let prepare_block = rpc.generate_to_address(1, &addr)?;
+    let prepare_block_hash = prepare_block[0].clone();
+    let prepare_block_json = rpc.get_block(&prepare_block_hash, 1)?;
+    let prepare_height = prepare_block_json["height"].as_u64().unwrap_or(0);
+    println!("prepare_block_height: {prepare_height}");
+
+    // Build the DEPLOY OP_RETURN message.
+    let deploy_msg = zalkanes_protocol::DeployMessage {
+        code_hash,
+        code_length: wasm.len() as u32,
+        chunk_count,
+        output_index: 0,
+    };
+    let op_return = zalkanes_protocol::encode_deploy(&deploy_msg);
+
+    // Carrier outpoints are outputs 0..chunk_count-1 of the PREPARE tx.
+    let mut carrier_outpoints = Vec::with_capacity(chunk_count as usize);
+    for i in 0..chunk_count {
+        carrier_outpoints.push(zcash_transparent::bundle::OutPoint::new(
+            rpc::rpc_txid_to_internal(&prepare_txid)?,
+            i as u32,
+        ));
+    }
+
+    let deploy = zalkanes_tx::build_deploy(
+        &key,
+        &carrier_outpoints,
+        &carrier_values,
+        &chunks,
+        &op_return,
+    )?;
+    let deploy_txid = deploy.txid_hex();
+    let accepted = rpc.send_raw_transaction(&hex::encode(&deploy.bytes))?;
+    if accepted != deploy_txid {
+        bail!("DEPLOY txid mismatch: sent {accepted} != expected {deploy_txid}");
+    }
+    println!("deploy_txid: {deploy_txid}");
+
+    // Mine DEPLOY.
+    let deploy_block = rpc.generate_to_address(1, &addr)?;
+    let deploy_block_hash = deploy_block[0].clone();
+    let deploy_block_json = rpc.get_block(&deploy_block_hash, 1)?;
+    let deploy_height = deploy_block_json["height"].as_u64().unwrap_or(0);
+    println!("deploy_block_height: {deploy_height}");
+
+    // Compute the deterministic ContractId (must match the indexer's).
+    let txid_internal = rpc::rpc_txid_to_internal(&deploy_txid)?;
+    let contract_id = zalkanes_core::types::ContractId::derive(
+        Network::Regtest,
+        &zalkanes_core::types::TxId(txid_internal),
+        0,
+        &code_hash,
+    );
+    println!("contract_id: {}", contract_id.as_hex());
+
+    if wait {
+        wait_for_contract(&contract_id, &code_hash).await?;
+        println!("indexed: true");
+    }
+
     Ok(())
+}
+
+async fn contract_call(contract_id: &str, opcode: u16, input_hex: &str, wait: bool) -> Result<()> {
+    let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
+    let key = signing_key()?;
+    let addr = funding_address(&key);
+
+    let cid = hex::decode(contract_id).context("contract_id hex")?;
+    if cid.len() != 32 {
+        bail!("contract_id must be 32 bytes");
+    }
+    let mut cid_bytes = [0u8; 32];
+    cid_bytes.copy_from_slice(&cid);
+
+    let input = hex::decode(input_hex).context("input hex")?;
+
+    // Build the CALL OP_RETURN message.
+    let call_msg = zalkanes_protocol::CallMessage {
+        contract_id: zalkanes_core::types::ContractId(cid_bytes),
+        opcode,
+        input,
+    };
+    let op_return = zalkanes_protocol::encode_call(&call_msg);
+
+    // Spend a fresh mature funding UTXO.
+    let funding_blocks = rpc.generate_to_address(110, &addr)?;
+    let (funding_outpoint, funding_value) = rpc::find_mature_utxo(&rpc, &addr, &funding_blocks)?;
+
+    let call = zalkanes_tx::build_call(&key, funding_outpoint, funding_value, &op_return)?;
+    let txid = call.txid_hex();
+    let accepted = rpc.send_raw_transaction(&hex::encode(&call.bytes))?;
+    if accepted != txid {
+        bail!("CALL txid mismatch: sent {accepted} != expected {txid}");
+    }
+    println!("txid: {txid}");
+
+    let block = rpc.generate_to_address(1, &addr)?;
+    let block_hash = block[0].clone();
+    let block_json = rpc.get_block(&block_hash, 1)?;
+    let height = block_json["height"].as_u64().unwrap_or(0);
+    println!("block_height: {height}");
+
+    if wait {
+        wait_for_execution(&txid).await?;
+    }
+
+    Ok(())
+}
+
+/// Poll the Zalkanes RPC until the contract is indexed.
+async fn wait_for_contract(
+    contract_id: &zalkanes_core::types::ContractId,
+    code_hash: &zalkanes_core::types::CodeHash,
+) -> Result<()> {
+    let url = std::env::var("ZALKANES_URL").unwrap_or_else(|_| "http://127.0.0.1:3030".to_string());
+    let client = reqwest::Client::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if std::time::Instant::now() > deadline {
+            bail!("timed out waiting for contract index");
+        }
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "zalkanes_getContract",
+            "params": [contract_id.as_hex()],
+        });
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("RPC call to {url}"))?;
+        let text = resp.text().await?;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(result) = v.get("result") {
+                if !result.is_null() {
+                    if let Some(hash) = result.get("code_hash").and_then(|h| h.as_str()) {
+                        if hash == code_hash.as_hex() {
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
+}
+
+/// Poll the Zalkanes RPC until a CALL execution for `txid` is recorded.
+async fn wait_for_execution(txid: &str) -> Result<()> {
+    let url = std::env::var("ZALKANES_URL").unwrap_or_else(|_| "http://127.0.0.1:3030".to_string());
+    let client = reqwest::Client::new();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if std::time::Instant::now() > deadline {
+            bail!("timed out waiting for CALL execution");
+        }
+        let body = serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "zalkanes_getExecution",
+            "params": [txid],
+        });
+        let resp = client
+            .post(&url)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .with_context(|| format!("RPC call to {url}"))?;
+        let text = resp.text().await?;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+            if let Some(result) = v.get("result") {
+                if !result.is_null() {
+                    println!("execution: {result}");
+                    return Ok(());
+                }
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    }
 }
 
 async fn contract_view(

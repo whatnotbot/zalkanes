@@ -223,18 +223,29 @@ pub fn parse_script_pushes(mut script: &[u8]) -> Vec<Vec<u8>> {
 
 /// Extract a carrier chunk from a scriptSig.
 ///
-/// Returns `(chunk_index, chunk_data)` per ADR 0003 / protocol-v0 §7:
-/// first push is the 1-byte `chunk_index`, second push is the chunk bytes.
+/// The scriptSig is:
+/// ```text
+/// PUSH(chunk_index) PUSH(chunk_data_part...)* PUSH(signature) PUSH(redeem_script)
+/// ```
+/// Returns `(chunk_index, chunk_data)` where `chunk_data` is the concatenation
+/// of all pushes between the index and the signature/redeem script (chunk data
+/// is split into ≤520-byte pushes to respect `MAX_SCRIPT_ELEMENT_SIZE`).
 pub fn chunk_from_script_sig(script: &[u8]) -> Option<(u8, Vec<u8>)> {
     let pushes = parse_script_pushes(script);
-    if pushes.len() < 2 {
+    // Need at least: index, one chunk part, signature, redeem_script.
+    if pushes.len() < 4 {
         return None;
     }
     let index = match pushes[0].as_slice() {
         [b] => *b,
         _ => return None,
     };
-    Some((index, pushes[1].clone()))
+    // Chunk data = pushes[1 .. len-2] (excludes signature and redeem_script).
+    let mut chunk_data = Vec::new();
+    for part in &pushes[1..pushes.len() - 2] {
+        chunk_data.extend_from_slice(part);
+    }
+    Some((index, chunk_data))
 }
 
 #[cfg(test)]
@@ -344,12 +355,27 @@ mod tests {
         // <0x02> <0xAA 0xBB 0xCC> <sig...> <redeem...>
         let script = [
             0x01, 0x02, // push 1 byte: chunk_index = 2
-            0x03, 0xAA, 0xBB, 0xCC, // push 3 bytes: chunk_data
+            0x03, 0xAA, 0xBB, 0xCC, // push 3 bytes: chunk_data part 1
             0x01, 0x30, // (fake signature)
             0x01, 0x51, // (fake redeem)
         ];
         let (idx, data) = chunk_from_script_sig(&script).unwrap();
         assert_eq!(idx, 2);
         assert_eq!(data, vec![0xAA, 0xBB, 0xCC]);
+    }
+
+    #[test]
+    fn chunk_from_script_sig_concatenates_multi_push_data() {
+        // chunk_index, two chunk parts, signature, redeem.
+        let script = [
+            0x01, 0x00, // chunk_index = 0
+            0x02, 0xAA, 0xBB, // chunk part 1
+            0x02, 0xCC, 0xDD, // chunk part 2
+            0x01, 0x30, // signature
+            0x01, 0x51, // redeem
+        ];
+        let (idx, data) = chunk_from_script_sig(&script).unwrap();
+        assert_eq!(idx, 0);
+        assert_eq!(data, vec![0xAA, 0xBB, 0xCC, 0xDD]);
     }
 }

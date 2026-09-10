@@ -30,11 +30,31 @@ use zcash_transparent::{
 };
 
 /// ZIP-317 conventional fee (5000 zatoshi per logical action, min 2).
+///
+/// Logical actions are computed from serialized sizes, per ZIP-317:
+/// `ceil(total_input_size / 150)` and `ceil(total_output_size / 34)`.
 pub fn zip317_fee(inputs: usize, outputs: usize) -> u64 {
     const MARGINAL_FEE: u64 = 5_000;
     const GRACE_ACTIONS: u64 = 2;
     let logical_actions = inputs.max(outputs) as u64;
     let actions = logical_actions.max(GRACE_ACTIONS);
+    MARGINAL_FEE * actions
+}
+
+/// ZIP-317 conventional fee from serialized input/output byte sizes.
+///
+/// This is the authoritative fee for carrier transactions, whose scriptSigs
+/// are large and therefore consume many logical actions.
+pub fn zip317_fee_from_sizes(total_input_bytes: usize, total_output_bytes: usize) -> u64 {
+    const MARGINAL_FEE: u64 = 5_000;
+    const GRACE_ACTIONS: u64 = 2;
+    const P2PKH_STANDARD_INPUT_SIZE: usize = 150;
+    const P2PKH_STANDARD_OUTPUT_SIZE: usize = 34;
+
+    let in_actions = total_input_bytes.div_ceil(P2PKH_STANDARD_INPUT_SIZE);
+    let out_actions = total_output_bytes.div_ceil(P2PKH_STANDARD_OUTPUT_SIZE);
+    let logical = in_actions.max(out_actions) as u64;
+    let actions = logical.max(GRACE_ACTIONS);
     MARGINAL_FEE * actions
 }
 
@@ -179,6 +199,14 @@ pub fn p2sh_script_pubkey(redeem: &[u8]) -> Vec<u8> {
     s.push(0x14); // push 20
     s.extend_from_slice(&hash);
     s.push(0x87); // OP_EQUAL
+    s
+}
+
+/// Build an OP_RETURN scriptPubKey: `OP_RETURN <push(payload)>`.
+pub fn op_return_script(payload: &[u8]) -> Vec<u8> {
+    let mut s = Vec::with_capacity(1 + payload.len() + 1);
+    s.push(0x6a); // OP_RETURN
+    s.extend_from_slice(&push_data(payload));
     s
 }
 
@@ -429,6 +457,226 @@ pub fn build_transparent_tx(
     txid.copy_from_slice(tx.txid().as_ref());
 
     Ok(SignedTx { bytes, txid })
+}
+
+// ── High-level PREPARE / DEPLOY / CALL ───────────────────────────────────────
+
+/// Serialized size of a script (CompactSize length prefix + bytes).
+fn serialized_script_size(len: usize) -> usize {
+    let compact = if len < 0xfd {
+        1
+    } else if len <= 0xffff {
+        3
+    } else {
+        5
+    };
+    compact + len
+}
+
+/// Serialized transparent input size: prevout(36) + scriptSig + sequence(4).
+fn input_serialized_size(script_sig_len: usize) -> usize {
+    36 + serialized_script_size(script_sig_len) + 4
+}
+
+/// Serialized transparent output size: value(8) + scriptPubKey.
+fn output_serialized_size(script_pubkey_len: usize) -> usize {
+    8 + serialized_script_size(script_pubkey_len)
+}
+
+/// Length of a P2PKH scriptSig: PUSH(sig≤73) + PUSH(pubkey=33).
+fn p2pkh_script_sig_len() -> usize {
+    (1 + MAX_SIGNATURE_LEN) + (1 + 33)
+}
+
+/// Length of a carrier scriptSig for a given chunk payload.
+fn carrier_script_sig_len(chunk_len: usize) -> usize {
+    // chunk_index push (2) + chunk data pushes + sig push + redeem push.
+    let mut len = 2; // chunk_index
+    let mut remaining = chunk_len;
+    while remaining > 0 {
+        let part = remaining.min(MAX_PUSH_SIZE);
+        len += push_overhead(part) + part;
+        remaining -= part;
+    }
+    len += 1 + MAX_SIGNATURE_LEN; // sig push
+    len += push_overhead(REDEEM_SCRIPT_LEN) + REDEEM_SCRIPT_LEN; // redeem push
+    len
+}
+
+/// Split WASM bytes into canonical chunks of `CHUNK_PAYLOAD_SIZE`.
+pub fn split_chunks(wasm: &[u8]) -> Result<Vec<Vec<u8>>> {
+    let n = carrier_input_count(wasm.len())?;
+    let mut chunks = Vec::with_capacity(n as usize);
+    for part in wasm.chunks(CHUNK_PAYLOAD_SIZE) {
+        chunks.push(part.to_vec());
+    }
+    Ok(chunks)
+}
+
+/// Build the PREPARE transaction: spend one funding UTXO, create N P2SH carrier
+/// outputs, and return change to the funding address.
+pub fn build_prepare(
+    funding_key: &SigningKey,
+    funding_outpoint: OutPoint,
+    funding_value: u64,
+    carrier_values: &[u64],
+) -> Result<SignedTx> {
+    let pubkey = funding_key.compressed_pubkey();
+    let redeem = redeem_script(&pubkey);
+    let carrier_script = p2sh_script_pubkey(&redeem);
+
+    let carrier_total: u64 = carrier_values.iter().sum();
+
+    let in_size = input_serialized_size(p2pkh_script_sig_len());
+    let out_size: usize = carrier_values
+        .iter()
+        .map(|_| output_serialized_size(carrier_script.len()))
+        .sum::<usize>()
+        + output_serialized_size(p2pkh_script_pubkey(&pubkey).len());
+    let fee = zip317_fee_from_sizes(in_size, out_size);
+
+    let change = funding_value
+        .checked_sub(carrier_total)
+        .and_then(|v| v.checked_sub(fee))
+        .ok_or_else(|| anyhow::anyhow!("funding UTXO too small for PREPARE"))?;
+
+    let mut outputs = Vec::with_capacity(carrier_values.len() + 1);
+    for v in carrier_values {
+        outputs.push(SpendOutput {
+            value: *v,
+            script_pubkey: carrier_script.clone(),
+        });
+    }
+    if change > 0 {
+        outputs.push(SpendOutput {
+            value: change,
+            script_pubkey: p2pkh_script_pubkey(&pubkey),
+        });
+    }
+
+    build_transparent_tx(
+        &[SpendInput {
+            outpoint: funding_outpoint,
+            value: funding_value,
+            script_pubkey: p2pkh_script_pubkey(&pubkey),
+            script_code: p2pkh_script_pubkey(&pubkey),
+            kind: SpendKind::P2pkh {
+                key: funding_key.clone(),
+            },
+        }],
+        &outputs,
+        0,
+    )
+}
+
+/// Build the DEPLOY transaction: spend N carrier UTXOs with WASM chunks in the
+/// scriptSigs, one OP_RETURN output carrying the Zalkanes DEPLOY message, and a
+/// change output returning the excess carrier value to the deployer.
+pub fn build_deploy(
+    key: &SigningKey,
+    carrier_outpoints: &[OutPoint],
+    carrier_values: &[u64],
+    chunks: &[Vec<u8>],
+    op_return: &[u8],
+) -> Result<SignedTx> {
+    if carrier_outpoints.len() != chunks.len() || carrier_outpoints.len() != carrier_values.len() {
+        bail!("carrier outpoints/values/chunks length mismatch");
+    }
+    let pubkey = key.compressed_pubkey();
+    let redeem = redeem_script(&pubkey);
+    let carrier_script = p2sh_script_pubkey(&redeem);
+
+    let in_size: usize = chunks
+        .iter()
+        .map(|c| input_serialized_size(carrier_script_sig_len(c.len())))
+        .sum();
+    let op_return = op_return_script(op_return);
+    let op_return_script_len = op_return.len();
+    let out_size = output_serialized_size(op_return_script_len)
+        + output_serialized_size(p2pkh_script_pubkey(&pubkey).len());
+    let fee = zip317_fee_from_sizes(in_size, out_size);
+
+    let carrier_total: u64 = carrier_values.iter().sum();
+    let change = carrier_total
+        .checked_sub(fee)
+        .ok_or_else(|| anyhow::anyhow!("carrier values too small for DEPLOY fee"))?;
+
+    let mut inputs = Vec::with_capacity(carrier_outpoints.len());
+    for (i, ((outpoint, value), chunk)) in carrier_outpoints
+        .iter()
+        .zip(carrier_values.iter())
+        .zip(chunks.iter())
+        .enumerate()
+    {
+        inputs.push(SpendInput {
+            outpoint: outpoint.clone(),
+            value: *value,
+            script_pubkey: carrier_script.clone(),
+            script_code: redeem.clone(),
+            kind: SpendKind::Carrier {
+                key: key.clone(),
+                chunk_index: i as u8,
+                chunk_data: chunk.clone(),
+                redeem_script: redeem.clone(),
+            },
+        });
+    }
+
+    let mut outputs = vec![SpendOutput {
+        value: 0,
+        script_pubkey: op_return,
+    }];
+    if change > 0 {
+        outputs.push(SpendOutput {
+            value: change,
+            script_pubkey: p2pkh_script_pubkey(&pubkey),
+        });
+    }
+
+    build_transparent_tx(&inputs, &outputs, 0)
+}
+
+/// Build a CALL transaction: spend one P2PKH funding UTXO, emit an OP_RETURN
+/// carrying the Zalkanes CALL message, and return change.
+pub fn build_call(
+    funding_key: &SigningKey,
+    funding_outpoint: OutPoint,
+    funding_value: u64,
+    op_return: &[u8],
+) -> Result<SignedTx> {
+    let pubkey = funding_key.compressed_pubkey();
+    let op_return = op_return_script(op_return);
+    let in_size = input_serialized_size(p2pkh_script_sig_len());
+    let out_size = output_serialized_size(op_return.len())
+        + output_serialized_size(p2pkh_script_pubkey(&pubkey).len());
+    let fee = zip317_fee_from_sizes(in_size, out_size);
+
+    let change = funding_value
+        .checked_sub(fee)
+        .ok_or_else(|| anyhow::anyhow!("funding UTXO too small for CALL"))?;
+
+    build_transparent_tx(
+        &[SpendInput {
+            outpoint: funding_outpoint,
+            value: funding_value,
+            script_pubkey: p2pkh_script_pubkey(&pubkey),
+            script_code: p2pkh_script_pubkey(&pubkey),
+            kind: SpendKind::P2pkh {
+                key: funding_key.clone(),
+            },
+        }],
+        &[
+            SpendOutput {
+                value: 0,
+                script_pubkey: op_return,
+            },
+            SpendOutput {
+                value: change,
+                script_pubkey: p2pkh_script_pubkey(&pubkey),
+            },
+        ],
+        0,
+    )
 }
 
 #[cfg(test)]
