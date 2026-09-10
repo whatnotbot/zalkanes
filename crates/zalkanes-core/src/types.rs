@@ -72,8 +72,8 @@ impl ContractId {
     /// )
     /// ```
     pub fn derive(network: Network, txid: &TxId, output_index: u16, code_hash: &CodeHash) -> Self {
-        use blake2b_simd::Params;
         use crate::consensus::CONTRACT_ID_PERSONALIZATION;
+        use blake2b_simd::Params;
 
         let mut input = Vec::with_capacity(1 + 32 + 2 + 32);
         input.push(network.id_byte());

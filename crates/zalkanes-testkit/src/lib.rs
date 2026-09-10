@@ -6,7 +6,7 @@
 //! real state root calculation — NOT a fake interpreter.
 //!
 //! Example:
-//! ```no_run
+//! ```ignore
 //! # use zalkanes_testkit::TestChain;
 //! let mut chain = TestChain::new();
 //! let contract_id = chain.deploy(include_bytes!("counter.wasm")).unwrap();
@@ -21,9 +21,8 @@
 use anyhow::{bail, Context, Result};
 use sha2::{Digest, Sha256};
 use zalkanes_carrier::{split, Chunk};
-use zalkanes_core::{
-    consensus::REGTEST_ACTIVATION_HEIGHT,
-    types::{BlockHash, BlockHeight, CodeHash, ContractId, Network, StateRoot, TxId},
+use zalkanes_core::types::{
+    BlockHash, BlockHeight, CodeHash, ContractId, Network, StateRoot, TxId,
 };
 use zalkanes_indexer::{IndexerConfig, MemoryIndexer, TestTx};
 use zalkanes_protocol::{encode_call, encode_deploy, CallMessage, DeployMessage};
@@ -72,8 +71,7 @@ impl TestChain {
         let txid = synthetic_txid(self.height, 0);
         let output_index: u16 = 0;
 
-        let contract_id =
-            ContractId::derive(Network::Regtest, &txid, output_index, &code_hash);
+        let contract_id = ContractId::derive(Network::Regtest, &txid, output_index, &code_hash);
 
         // Split into chunks (4 KiB each)
         let chunks = split(wasm, 4096);
@@ -170,14 +168,14 @@ fn synthetic_txid(height: BlockHeight, tx_index: u32) -> TxId {
     let mut data = [0u8; 8];
     data[0..4].copy_from_slice(&height.to_be_bytes());
     data[4..8].copy_from_slice(&tx_index.to_be_bytes());
-    let digest = Sha256::digest(&data);
+    let digest = Sha256::digest(data);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest);
     TxId(out)
 }
 
 fn synthetic_hash(height: BlockHeight) -> [u8; 32] {
-    let digest = Sha256::digest(&height.to_be_bytes());
+    let digest = Sha256::digest(height.to_be_bytes());
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest);
     out

@@ -88,7 +88,11 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
 
     let module = match Module::new(&engine, &wasm) {
         Ok(m) => m,
-        Err(e) => return CallResult::InvalidModule { reason: e.to_string() },
+        Err(e) => {
+            return CallResult::InvalidModule {
+                reason: e.to_string(),
+            }
+        }
     };
 
     // Copy storage for overlay — writes go here and are promoted on success
@@ -129,16 +133,15 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
         }
     };
 
-    let dispatch_fn =
-        match instance.get_typed_func::<(i32, i32), i32>(&store, "dispatch") {
-            Ok(f) => f,
-            Err(_) => {
-                return CallResult::Trap {
-                    reason: "missing 'dispatch' export".to_string(),
-                    fuel_used: 0,
-                };
-            }
-        };
+    let dispatch_fn = match instance.get_typed_func::<(i32, i32), i32>(&store, "dispatch") {
+        Ok(f) => f,
+        Err(_) => {
+            return CallResult::Trap {
+                reason: "missing 'dispatch' export".to_string(),
+                fuel_used: 0,
+            };
+        }
+    };
 
     match dispatch_fn.call(&mut store, (ctx.opcode as i32, ctx.input.len() as i32)) {
         Ok(0) => {
@@ -166,7 +169,10 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
             if msg.contains("fuel") || msg.contains("OutOfFuel") {
                 CallResult::FuelExhausted { fuel_used }
             } else {
-                CallResult::Trap { reason: msg, fuel_used }
+                CallResult::Trap {
+                    reason: msg,
+                    fuel_used,
+                }
             }
         }
     }
@@ -193,7 +199,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                     let data = mem.data(&caller);
                     let s = key_ptr as usize;
                     let e = s.saturating_add(key_len as usize);
-                    if e > data.len() { return -1; }
+                    if e > data.len() {
+                        return -1;
+                    }
                     data[s..e].to_vec()
                 };
                 let cid = caller.data().contract_id;
@@ -204,7 +212,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                         let vlen = v.len();
                         let data = mem.data_mut(&mut caller);
                         let dst = val_ptr as usize;
-                        if dst + vlen > data.len() { return -1; }
+                        if dst + vlen > data.len() {
+                            return -1;
+                        }
                         data[dst..dst + vlen].copy_from_slice(&v);
                         vlen as i32
                     }
@@ -224,8 +234,12 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
              val_ptr: i32,
              val_len: i32|
              -> i32 {
-                if key_len as u32 > MAX_STORAGE_KEY_BYTES { return -1; }
-                if val_len as u32 > MAX_STORAGE_VALUE_BYTES { return -1; }
+                if key_len as u32 > MAX_STORAGE_KEY_BYTES {
+                    return -1;
+                }
+                if val_len as u32 > MAX_STORAGE_VALUE_BYTES {
+                    return -1;
+                }
                 let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                     Some(m) => m,
                     None => return -1,
@@ -236,7 +250,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                     let ke = ks.saturating_add(key_len as usize);
                     let vs = val_ptr as usize;
                     let ve = vs.saturating_add(val_len as usize);
-                    if ke > data.len() || ve > data.len() { return -1; }
+                    if ke > data.len() || ve > data.len() {
+                        return -1;
+                    }
                     (data[ks..ke].to_vec(), data[vs..ve].to_vec())
                 };
                 let cid = caller.data().contract_id;
@@ -252,7 +268,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
             "env",
             "output_write",
             |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> i32 {
-                if len as u32 > MAX_RETURN_DATA_BYTES { return -1; }
+                if len as u32 > MAX_RETURN_DATA_BYTES {
+                    return -1;
+                }
                 let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                     Some(m) => m,
                     None => return -1,
@@ -261,7 +279,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                     let data = mem.data(&caller);
                     let s = ptr as usize;
                     let e = s.saturating_add(len as usize);
-                    if e > data.len() { return -1; }
+                    if e > data.len() {
+                        return -1;
+                    }
                     data[s..e].to_vec()
                 };
                 caller.data_mut().output = out;
@@ -283,7 +303,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                 };
                 let data = mem.data_mut(&mut caller);
                 let s = out_ptr as usize;
-                if s + 4 > data.len() { return -1; }
+                if s + 4 > data.len() {
+                    return -1;
+                }
                 data[s..s + 4].copy_from_slice(&height.to_be_bytes());
                 0
             },
@@ -302,7 +324,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
              -> i32 {
                 let input = caller.data().input.clone();
                 let off = offset as usize;
-                if off >= input.len() { return 0; }
+                if off >= input.len() {
+                    return 0;
+                }
                 let slice = &input[off..input.len().min(off + len as usize)];
                 let slen = slice.len();
                 let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
@@ -311,7 +335,9 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                 };
                 let data = mem.data_mut(&mut caller);
                 let s = out_ptr as usize;
-                if s + slen > data.len() { return -1; }
+                if s + slen > data.len() {
+                    return -1;
+                }
                 data[s..s + slen].copy_from_slice(slice);
                 slen as i32
             },

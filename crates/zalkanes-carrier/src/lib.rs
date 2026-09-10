@@ -6,7 +6,6 @@
 
 #![forbid(unsafe_code)]
 
-use sha2::{Digest, Sha256};
 use zalkanes_core::{consensus::MAX_CODE_BYTES, types::CodeHash};
 
 /// A single chunk extracted from a carrier scriptSig.
@@ -180,7 +179,10 @@ mod tests {
         let wasm = dummy_wasm(600);
         let hash = CodeHash::of(&wasm);
         let mut chunks = split(&wasm, 300);
-        let dup = Chunk { index: 0, data: chunks[0].data.clone() };
+        let dup = Chunk {
+            index: 0,
+            data: chunks[0].data.clone(),
+        };
         chunks[1] = dup; // replace chunk 1 with a duplicate of chunk 0
         assert!(matches!(
             reconstruct(&chunks, 2, wasm.len() as u32, &hash),

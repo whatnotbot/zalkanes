@@ -14,10 +14,10 @@ ROOT="$SCRIPT_DIR/.."
 
 echo "==> Building counter contract..."
 cd "$ROOT"
-cargo build --release --target wasm32-unknown-unknown -p counter \
-  2>&1 | tail -5
+cargo build --release --target wasm32-unknown-unknown \
+  --manifest-path contracts/counter/Cargo.toml 2>&1 | tail -5
 
-WASM=$(find target/wasm32-unknown-unknown/release -name "counter.wasm" | head -1)
+WASM=$(find contracts/counter/target/wasm32-unknown-unknown/release -name "counter.wasm" | head -1)
 if [[ -z "$WASM" ]]; then
   echo "ERROR: counter.wasm not found" >&2; exit 1
 fi

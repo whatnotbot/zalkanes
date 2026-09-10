@@ -4,11 +4,14 @@ version = "0.1.0"
 edition = "2021"
 publish = false
 
+[workspace]
+
 [lib]
 crate-type = ["cdylib"]
 
 [dependencies]
 zalkanes-sdk = { path = "../../crates/zalkanes-sdk" }
+wee_alloc = "=0.4.5"
 
 [profile.release]
 opt-level = "s"

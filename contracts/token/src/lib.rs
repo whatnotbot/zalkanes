@@ -15,6 +15,9 @@
 
 #![no_std]
 #![no_main]
+
+#[global_allocator]
+static ALLOC: wee_alloc::WeeAlloc = wee_alloc::WeeAlloc::INIT;
 extern crate alloc;
 
 use zalkanes_sdk as sdk;
@@ -49,7 +52,9 @@ fn u128_to_bytes(v: u128) -> [u8; 16] {
 }
 
 fn bytes_to_u128(b: &[u8]) -> u128 {
-    if b.len() < 16 { return 0; }
+    if b.len() < 16 {
+        return 0;
+    }
     let mut arr = [0u8; 16];
     arr.copy_from_slice(&b[..16]);
     u128::from_be_bytes(arr)
@@ -61,7 +66,9 @@ pub extern "C" fn dispatch(opcode: i32, _input_len: i32) -> i32 {
     match opcode as u16 {
         // initialize(supply: u128 BE, owner: [u8;32])
         0x0001 => {
-            if input.len() < 48 { return -1; }
+            if input.len() < 48 {
+                return -1;
+            }
             let supply = bytes_to_u128(&input[..16]);
             let owner: [u8; 32] = input[16..48].try_into().unwrap_or([0u8; 32]);
             set_supply(supply);
@@ -71,7 +78,9 @@ pub extern "C" fn dispatch(opcode: i32, _input_len: i32) -> i32 {
         }
         // balance_of(addr: [u8;32]) -> u128 BE
         0x0002 => {
-            if input.len() < 32 { return -1; }
+            if input.len() < 32 {
+                return -1;
+            }
             let addr: [u8; 32] = input[..32].try_into().unwrap_or([0u8; 32]);
             let bal = get_balance(&addr);
             sdk::write_output(&u128_to_bytes(bal));
@@ -79,13 +88,17 @@ pub extern "C" fn dispatch(opcode: i32, _input_len: i32) -> i32 {
         }
         // transfer(from: [u8;32], to: [u8;32], amount: u128 BE)
         0x0003 => {
-            if input.len() < 80 { return -1; }
+            if input.len() < 80 {
+                return -1;
+            }
             let from: [u8; 32] = input[0..32].try_into().unwrap_or([0u8; 32]);
-            let to:   [u8; 32] = input[32..64].try_into().unwrap_or([0u8; 32]);
+            let to: [u8; 32] = input[32..64].try_into().unwrap_or([0u8; 32]);
             let amount = bytes_to_u128(&input[64..80]);
             let from_bal = get_balance(&from);
-            if from_bal < amount { return -1; } // insufficient balance
-            // No overflow possible: total supply fits in u128
+            if from_bal < amount {
+                return -1;
+            } // insufficient balance
+              // No overflow possible: total supply fits in u128
             set_balance(&from, from_bal - amount);
             let to_bal = get_balance(&to);
             set_balance(&to, to_bal.saturating_add(amount));
@@ -93,12 +106,16 @@ pub extern "C" fn dispatch(opcode: i32, _input_len: i32) -> i32 {
         }
         // mint(to: [u8;32], amount: u128 BE)
         0x0004 => {
-            if input.len() < 48 { return -1; }
+            if input.len() < 48 {
+                return -1;
+            }
             let to: [u8; 32] = input[0..32].try_into().unwrap_or([0u8; 32]);
             let amount = bytes_to_u128(&input[32..48]);
             let supply = get_supply();
             let new_supply = supply.checked_add(amount).unwrap_or(u128::MAX);
-            if new_supply == u128::MAX { return -1; } // overflow guard
+            if new_supply == u128::MAX {
+                return -1;
+            } // overflow guard
             set_supply(new_supply);
             let bal = get_balance(&to);
             set_balance(&to, bal.saturating_add(amount));
@@ -106,11 +123,15 @@ pub extern "C" fn dispatch(opcode: i32, _input_len: i32) -> i32 {
         }
         // burn(from: [u8;32], amount: u128 BE)
         0x0005 => {
-            if input.len() < 48 { return -1; }
+            if input.len() < 48 {
+                return -1;
+            }
             let from: [u8; 32] = input[0..32].try_into().unwrap_or([0u8; 32]);
             let amount = bytes_to_u128(&input[32..48]);
             let bal = get_balance(&from);
-            if bal < amount { return -1; }
+            if bal < amount {
+                return -1;
+            }
             let supply = get_supply();
             set_balance(&from, bal - amount);
             set_supply(supply.saturating_sub(amount));

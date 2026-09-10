@@ -80,7 +80,7 @@ pub fn parse_op_return(payload: &[u8]) -> Result<Option<Message>, ParseError> {
     }
 
     // Check magic — silent skip on mismatch.
-    if &payload[0..4] != PROTOCOL_MAGIC {
+    if payload[0..4] != PROTOCOL_MAGIC {
         return Ok(None);
     }
 
@@ -116,7 +116,10 @@ fn parse_deploy(body: &[u8]) -> Result<DeployMessage, ParseError> {
 
     let code_length = u32::from_be_bytes([body[32], body[33], body[34], body[35]]);
     if code_length == 0 || code_length > MAX_CODE_BYTES {
-        return Err(ParseError::CodeLengthExceedsMax(code_length, MAX_CODE_BYTES));
+        return Err(ParseError::CodeLengthExceedsMax(
+            code_length,
+            MAX_CODE_BYTES,
+        ));
     }
 
     let chunk_count = body[36];
@@ -315,10 +318,13 @@ mod tests {
         payload.extend_from_slice(&msg.contract_id.0);
         payload.extend_from_slice(&0u16.to_be_bytes()); // opcode
         payload.extend_from_slice(&5u16.to_be_bytes()); // claim 5 bytes
-        // but add 0 input bytes
+                                                        // but add 0 input bytes
         assert!(matches!(
             parse_op_return(&payload),
-            Err(ParseError::InputLengthMismatch { declared: 5, actual: 0 })
+            Err(ParseError::InputLengthMismatch {
+                declared: 5,
+                actual: 0
+            })
         ));
     }
 }

@@ -201,13 +201,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "caller"
-version = "0.1.0"
-dependencies = [
- "zalkanes-sdk",
-]
-
-[[package]]
 name = "cc"
 version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -345,13 +338,6 @@ name = "core-foundation-sys"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "773648b94d0e5d620f64f280777445740e61fe701025087ec8b57f45c791888b"
-
-[[package]]
-name = "counter"
-version = "0.1.0"
-dependencies = [
- "zalkanes-sdk",
-]
 
 [[package]]
 name = "cpufeatures"
@@ -1142,13 +1128,6 @@ dependencies = [
  "jsonrpsee-core",
  "jsonrpsee-types",
  "url",
-]
-
-[[package]]
-name = "key-value"
-version = "0.1.0"
-dependencies = [
- "zalkanes-sdk",
 ]
 
 [[package]]
@@ -2145,13 +2124,6 @@ name = "tinyvec_macros"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
-
-[[package]]
-name = "token"
-version = "0.1.0"
-dependencies = [
- "zalkanes-sdk",
-]
 
 [[package]]
 name = "tokio"

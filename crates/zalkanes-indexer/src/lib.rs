@@ -6,13 +6,12 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tracing::{debug, info, warn};
 use zalkanes_carrier::{reconstruct, Chunk};
-use zalkanes_chain::ChainSource;
 use zalkanes_core::{
     consensus::{MAINNET_ACTIVATION_HEIGHT, REGTEST_ACTIVATION_HEIGHT, TESTNET_ACTIVATION_HEIGHT},
-    types::{BlockHash, BlockHeight, BlockRef, CodeHash, ContractId, Network},
+    types::{BlockHash, BlockHeight, ContractId, Network},
 };
 use zalkanes_protocol::{parse_op_return, Message};
 use zalkanes_runtime::{execute, CallContext, CallResult};

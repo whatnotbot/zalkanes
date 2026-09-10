@@ -14,29 +14,12 @@ members = [
     "crates/zalkanes-tx",
     "crates/zalkanes-testkit",
     "crates/zalkanes-cli",
-    "contracts/counter",
-    "contracts/key-value",
-    "contracts/token",
-    "contracts/caller",
 ]
-# Contract crates are wasm32-only cdylib targets.
-# Build them with: cargo build --target wasm32-unknown-unknown -p counter
-# They are excluded from default host builds to avoid no_std allocator errors.
-default-members = [
-    "crates/zalkanes-core",
-    "crates/zalkanes-chain",
-    "crates/zalkanes-protocol",
-    "crates/zalkanes-carrier",
-    "crates/zalkanes-runtime",
-    "crates/zalkanes-state",
-    "crates/zalkanes-indexer",
-    "crates/zalkanes-rpc",
-    "crates/zalkanes-sdk",
-    "crates/zalkanes-build",
-    "crates/zalkanes-tx",
-    "crates/zalkanes-testkit",
-    "crates/zalkanes-cli",
-]
+# Contract crates under contracts/ are wasm32-only cdylib projects (no_std +
+# #[panic_handler]). They are NOT workspace members: build them explicitly with
+#   cargo build --target wasm32-unknown-unknown --manifest-path contracts/<name>/Cargo.toml
+# This keeps `cargo test --workspace` host-only and avoids duplicate `panic_impl`
+# and missing `wasm32` arch errors.
 
 [workspace.package]
 version      = "0.1.0"

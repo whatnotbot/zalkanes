@@ -5,8 +5,6 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::Result;
-
 /// Estimated transaction size in bytes for fee calculation.
 pub struct TxSizeEstimate {
     pub version_bytes: usize,
