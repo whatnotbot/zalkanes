@@ -63,6 +63,15 @@ impl ZcashRpc {
     pub fn get_raw_transaction(&self, txid: &str, verbosity: u8) -> Result<Value> {
         self.call("getrawtransaction", serde_json::json!([txid, verbosity]))
     }
+
+    /// The current chain tip height (via `getblockchaininfo.blocks`).
+    pub fn tip_height(&self) -> Result<u32> {
+        let v = self.call("getblockchaininfo", serde_json::json!([]))?;
+        v["blocks"]
+            .as_u64()
+            .map(|h| h as u32)
+            .context("getblockchaininfo missing blocks")
+    }
 }
 
 /// Parse an RPC display-order txid into internal byte order.

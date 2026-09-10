@@ -16,6 +16,8 @@ zcash_primitives  = { workspace = true }
 zcash_protocol    = { workspace = true }
 zcash_transparent = { workspace = true }
 zcash_script      = { workspace = true }
+orchard           = { workspace = true }
+sapling-crypto    = { workspace = true }
 secp256k1         = { workspace = true }
 
 [dev-dependencies]

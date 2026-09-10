@@ -45,6 +45,10 @@ zcash_protocol    = { version = "=0.10.6", default-features = false, features = 
 zcash_transparent = { version = "=0.10.0", default-features = false, features = ["std", "transparent-inputs"] }
 zcash_address     = { version = "=0.6.0",  default-features = false }
 zcash_script      = { version = "=0.4.3",  default-features = false }
+# Transparent V5 (ZIP-244) signing needs the sapling/orchard bundle authorization
+# marker types (markers only, not the proving circuits).
+orchard           = { version = "=0.15.5", default-features = false }
+sapling-crypto    = { version = "=0.7.0",  default-features = false }
 secp256k1         = { version = "=0.29.0" }
 
 # Storage

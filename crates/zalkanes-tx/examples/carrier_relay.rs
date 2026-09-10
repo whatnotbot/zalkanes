@@ -189,7 +189,7 @@ fn main() -> Result<()> {
             },
         ],
         0,
-        BranchId::Canopy,
+        BranchId::Nu6_3,
     )?;
     let prepare_txid_display = prepare.txid_hex();
     println!("PREPARE txid: {prepare_txid_display}");
@@ -234,7 +234,7 @@ fn main() -> Result<()> {
             },
         ],
         0,
-        BranchId::Canopy,
+        BranchId::Nu6_3,
     )?;
     let deploy_txid_display = deploy.txid_hex();
     println!("DEPLOY txid: {deploy_txid_display}");

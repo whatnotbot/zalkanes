@@ -118,7 +118,7 @@ fn main() -> Result<()> {
     // of the DEPLOY fee + dust threshold. Use 100_000 zatoshi per carrier.
     let carrier_val = 100_000u64;
     let values = vec![carrier_val; n];
-    let prepare = build_prepare(&key, &funding, &values, BranchId::Canopy)?;
+    let prepare = build_prepare(&key, &funding, &values, BranchId::Nu6_3)?;
     let prepare_txid = prepare.txid_hex();
     assert_eq!(rpc.send(&hex::encode(&prepare.bytes))?, prepare_txid);
     let pb = rpc.generate(1, &addr)?;
@@ -144,7 +144,7 @@ fn main() -> Result<()> {
         &values,
         &chunks,
         &op_return,
-        BranchId::Canopy,
+        BranchId::Nu6_3,
     )?;
     let deploy_txid = deploy.txid_hex();
     assert_eq!(rpc.send(&hex::encode(&deploy.bytes))?, deploy_txid);

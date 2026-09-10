@@ -10,3 +10,4 @@ serde = { workspace = true }
 blake2b_simd = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
+zcash_protocol = { workspace = true }

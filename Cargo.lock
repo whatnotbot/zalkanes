@@ -3644,6 +3644,7 @@ dependencies = [
  "serde",
  "sha2 0.10.8",
  "thiserror 1.0.64",
+ "zcash_protocol",
 ]
 
 [[package]]
@@ -3748,7 +3749,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
+ "orchard",
  "reqwest",
+ "sapling-crypto",
  "secp256k1",
  "serde_json",
  "sha2 0.10.8",

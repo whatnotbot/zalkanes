@@ -13,10 +13,11 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{bail, Result};
-use zalkanes_core::{consensus::MAX_CODE_BYTES, types::Network};
+use zalkanes_core::consensus::MAX_CODE_BYTES;
 use zcash_primitives::transaction::{
-    sighash::SignableInput as PrimitivesSignableInput, sighash_v4::v4_signature_hash, Authorized,
-    Transaction, TransactionData, TxVersion,
+    sighash::{signature_hash, SignableInput as PrimitivesSignableInput},
+    txid::TxIdDigester,
+    Authorization, Authorized, Transaction, TransactionData, TxVersion,
 };
 use zcash_protocol::{
     consensus::{BlockHeight, BranchId},
@@ -25,6 +26,7 @@ use zcash_protocol::{
 use zcash_script::script::Code;
 use zcash_transparent::{
     address::{Script, TransparentAddress},
+    builder::TransparentBuilder,
     bundle::{Authorized as TAuthorized, Bundle, OutPoint, TxIn, TxOut},
     sighash::{SighashType, SignableInput as TransparentSignableInput, SIGHASH_ALL},
 };
@@ -318,27 +320,26 @@ impl SignedTx {
     }
 }
 
-/// The consensus branch ID to use for V4 transparent transaction signing.
-///
-/// V4 transactions are signed with the ZIP-243 sighash, whose personalization
-/// embeds the branch ID of the network upgrade active at the signing height
-/// (see Zebra's `Transaction::to_librustzcash`, which reads a V4 transaction
-/// with `NetworkUpgrade::current(network, height).branch_id()`). Signing with
-/// the wrong branch ID makes the transaction invalid under consensus.
-///
-/// This mapping is consensus-critical and pinned to the current milestone:
-/// - Regtest → Canopy (Zebra's regtest chain stops activating upgrades at Canopy).
-/// - Testnet → Nu6.3 (testnet tip is past the Nu6.3 activation height 4,134,000).
-/// - Mainnet → refused (mainnet activation is `None` pre-audit).
-pub fn branch_id_for_network(network: Network) -> Result<BranchId> {
-    match network {
-        Network::Regtest => Ok(BranchId::Canopy),
-        Network::Testnet => Ok(BranchId::Nu6_3),
-        Network::Mainnet => bail!("mainnet activation is not set (pre-audit)"),
-    }
+/// An [`Authorization`] marker whose transparent bundle is the builder's
+/// [`zcash_transparent::builder::Unauthorized`] type. That type exposes the
+/// input amounts and scriptPubKeys (the effecting data) required to compute the
+/// ZIP-244 sighash, while holding placeholder (empty) scriptSigs.
+struct TransparentUnauthorized;
+
+impl Authorization for TransparentUnauthorized {
+    type TransparentAuth = zcash_transparent::builder::Unauthorized;
+    type SaplingAuth = sapling_crypto::bundle::Authorized;
+    type OrchardAuth = orchard::bundle::Authorized;
 }
 
-/// Build and sign a transparent-only V4 transaction.
+/// Build and sign a transparent-only V5 transaction.
+///
+/// Uses the canonical ZIP-244 sighash (librustzcash
+/// [`zcash_primitives::transaction::sighash::signature_hash`]) and the ZIP-244
+/// transaction id, so the txid commits to the transaction's *effecting* data
+/// (outputs + effects) and excludes authorization bytes (scriptSigs). The
+/// `branch_id` is the consensus branch id active at the target height; for V5 it
+/// is serialized in the transaction header and must be a Nu5+ branch.
 pub fn build_transparent_tx(
     inputs: &[SpendInput],
     outputs: &[SpendOutput],
@@ -351,12 +352,6 @@ pub fn build_transparent_tx(
 
     let secp = secp256k1::Secp256k1::new();
 
-    // 1. Placeholder bundle (empty scriptSigs) — the v4 sighash depends only on
-    //    prevout, script_code, value, and sequence, NOT scriptSig bytes.
-    let vin_placeholder: Vec<TxIn<TAuthorized>> = inputs
-        .iter()
-        .map(|inp| TxIn::from_parts(inp.outpoint.clone(), Script(Code(Vec::new())), u32::MAX))
-        .collect();
     let vout: Vec<TxOut> = outputs
         .iter()
         .map(|o| {
@@ -367,21 +362,47 @@ pub fn build_transparent_tx(
         })
         .collect::<Result<_>>()?;
 
-    let bundle_placeholder = Bundle {
-        vin: vin_placeholder,
-        vout: vout.clone(),
-        authorization: TAuthorized,
-    };
-    let tx_placeholder: TransactionData<Authorized> = TransactionData::from_parts(
-        TxVersion::V4,
+    // 1. Build the `Unauthorized` bundle (placeholder scriptSigs + the input
+    //    amounts/scriptPubKeys needed for the ZIP-244 sighash). The canonical
+    //    `TransparentBuilder` validates P2PKH/P2SH spend info against the coin.
+    let mut builder = TransparentBuilder::empty();
+    for inp in inputs {
+        let coin = TxOut::new(
+            Zatoshis::from_u64(inp.value)?,
+            Script(Code(inp.script_pubkey.clone())),
+        );
+        match &inp.kind {
+            SpendKind::P2pkh { key } => {
+                builder.add_p2pkh_input(key.public, inp.outpoint.clone(), coin)?;
+            }
+            SpendKind::Carrier { redeem_script, .. } => {
+                let redeem = zcash_script::script::FromChain::parse(&Code(redeem_script.clone()))
+                    .map_err(|e| anyhow::anyhow!("invalid redeem script: {e}"))?;
+                builder.add_p2sh_input(redeem, inp.outpoint.clone(), coin)?;
+            }
+        }
+    }
+    let mut bundle_unauth = builder
+        .build()
+        .ok_or_else(|| anyhow::anyhow!("empty transaction"))?;
+    // The builder cannot add OP_RETURN (nulldata) outputs; overwrite `vout` with
+    // the exact outputs after `build()`.
+    bundle_unauth.vout = vout.clone();
+
+    let tx_placeholder: TransactionData<TransparentUnauthorized> = TransactionData::from_parts(
+        TxVersion::V5,
         branch_id,
         lock_time,
         BlockHeight::from_u32(0),
-        Some(bundle_placeholder),
+        Some(bundle_unauth.clone()),
         None,
         None,
         None,
     );
+
+    // ZIP-244 txid parts (digests of the effecting data). These are shared by
+    // every input's signature hash and by the final transaction id.
+    let txid_parts = tx_placeholder.digest(TxIdDigester);
 
     // 2. Sighash + sign each input.
     let mut final_script_sigs = Vec::with_capacity(inputs.len());
@@ -390,19 +411,8 @@ pub fn build_transparent_tx(
         let script_pubkey_script = Script(Code(inp.script_pubkey.clone()));
         let value = Zatoshis::from_u64(inp.value)?;
 
-        let bundle_for_signable = Bundle {
-            vin: tx_placeholder
-                .transparent_bundle()
-                .map(|b| b.vin.clone())
-                .unwrap_or_default(),
-            vout: tx_placeholder
-                .transparent_bundle()
-                .map(|b| b.vout.clone())
-                .unwrap_or_default(),
-            authorization: TAuthorized,
-        };
         let signable = TransparentSignableInput::from_parts(
-            &bundle_for_signable,
+            &bundle_unauth,
             SighashType::ALL,
             i,
             &script_code_script,
@@ -411,23 +421,21 @@ pub fn build_transparent_tx(
         )
         .map_err(|e| anyhow::anyhow!("invalid input index: {e}"))?;
 
-        let sighash = v4_signature_hash(
+        let sighash = signature_hash(
             &tx_placeholder,
             &PrimitivesSignableInput::Transparent(signable),
+            &txid_parts,
         );
         let mut msg = [0u8; 32];
         msg.copy_from_slice(sighash.as_ref());
         let msg = secp256k1::Message::from_digest(msg);
 
-        let (key, script_sig) = match &inp.kind {
+        let script_sig = match &inp.kind {
             SpendKind::P2pkh { key } => {
                 let sig = secp.sign_ecdsa(&msg, &key.secret);
                 let mut sig_bytes = sig.serialize_der().to_vec();
                 sig_bytes.push(SIGHASH_ALL);
-                (
-                    key.clone(),
-                    p2pkh_script_sig(&sig_bytes, &key.compressed_pubkey()),
-                )
+                p2pkh_script_sig(&sig_bytes, &key.compressed_pubkey())
             }
             SpendKind::Carrier {
                 key,
@@ -438,13 +446,9 @@ pub fn build_transparent_tx(
                 let sig = secp.sign_ecdsa(&msg, &key.secret);
                 let mut sig_bytes = sig.serialize_der().to_vec();
                 sig_bytes.push(SIGHASH_ALL);
-                (
-                    key.clone(),
-                    carrier_script_sig(*chunk_index, chunk_data, &sig_bytes, redeem_script),
-                )
+                carrier_script_sig(*chunk_index, chunk_data, &sig_bytes, redeem_script)
             }
         };
-        let _ = key;
         final_script_sigs.push(script_sig);
     }
 
@@ -460,7 +464,7 @@ pub fn build_transparent_tx(
         authorization: TAuthorized,
     };
     let tx_data: TransactionData<Authorized> = TransactionData::from_parts(
-        TxVersion::V4,
+        TxVersion::V5,
         branch_id,
         lock_time,
         BlockHeight::from_u32(0),

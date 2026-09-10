@@ -9,8 +9,11 @@
 #![forbid(unsafe_code)]
 
 pub mod consensus;
+pub mod consensus_params;
 pub mod error;
 pub mod types;
+
+pub use consensus_params::{branch_id_for_height, ConsensusParams};
 
 pub use types::{
     BlockHash, BlockHeight, BlockRef, CodeHash, ContractId, Execution, Network, StateRoot, TxId,

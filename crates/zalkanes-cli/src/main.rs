@@ -580,9 +580,16 @@ fn funding_address(key: &zalkanes_tx::SigningKey, network: Network) -> String {
         .to_string()
 }
 
-/// The consensus branch ID for signing V4 transparent transactions on `network`.
-fn network_branch_id(network: Network) -> Result<zcash_protocol::consensus::BranchId> {
-    zalkanes_tx::branch_id_for_network(network)
+/// The consensus branch ID active at the current chain tip for `network`,
+/// resolved height-aware via canonical Zcash consensus parameters. The
+/// transaction will be mined at (or just above) the current tip, so the tip's
+/// branch id is the correct one to sign with.
+fn network_branch_id(
+    rpc: &rpc::ZcashRpc,
+    network: Network,
+) -> Result<zcash_protocol::consensus::BranchId> {
+    let tip = rpc.tip_height()?;
+    Ok(zalkanes_core::branch_id_for_height(network, tip))
 }
 
 /// Obtain a spendable funding UTXO for `addr`.
@@ -678,8 +685,8 @@ async fn contract_fund(blocks: u32) -> Result<()> {
 
 async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
     let network = network_from_env()?;
-    let branch_id = network_branch_id(network)?;
     let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
+    let branch_id = network_branch_id(&rpc, network)?;
     let key = signing_key()?;
     let addr = funding_address(&key, network);
 
@@ -780,8 +787,8 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
 
 async fn contract_call(contract_id: &str, opcode: u16, input_hex: &str, wait: bool) -> Result<()> {
     let network = network_from_env()?;
-    let branch_id = network_branch_id(network)?;
     let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
+    let branch_id = network_branch_id(&rpc, network)?;
     let key = signing_key()?;
     let addr = funding_address(&key, network);
 
