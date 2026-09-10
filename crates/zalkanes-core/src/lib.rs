@@ -12,4 +12,6 @@ pub mod consensus;
 pub mod error;
 pub mod types;
 
-pub use types::{BlockHash, BlockHeight, BlockRef, CodeHash, ContractId, Network, StateRoot, TxId};
+pub use types::{
+    BlockHash, BlockHeight, BlockRef, CodeHash, ContractId, Execution, Network, StateRoot, TxId,
+};

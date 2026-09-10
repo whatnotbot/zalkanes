@@ -124,6 +124,119 @@ pub enum CarrierError {
     HashMismatch { expected: String, actual: String },
 }
 
+// ── Script parsing (OP_RETURN + carrier scriptSig) ───────────────────────────
+//
+// Zalkanes never executes Zcash script; it only *reads* the push-only data
+// placed in OP_RETURN outputs and carrier scriptSigs. These helpers parse the
+// canonical push encodings deterministically.
+
+/// Extract the data payload of an OP_RETURN output.
+///
+/// Returns the full pushed payload if the script is `OP_RETURN <data>`,
+/// otherwise `None`. Handles OP_0 and the standard 1/2/4-byte push opcodes.
+pub fn extract_op_return_data(script: &[u8]) -> Option<Vec<u8>> {
+    if script.first() != Some(&0x6a) {
+        return None;
+    }
+    // Skip OP_RETURN opcode, then parse the single data push that follows.
+    let rest = &script[1..];
+    if rest.is_empty() {
+        // Bare OP_RETURN — no data.
+        return Some(Vec::new());
+    }
+    let (payload, consumed) = parse_push(rest)?;
+    // OP_RETURN must contain exactly one data push (no trailing opcodes).
+    if consumed != rest.len() {
+        return None;
+    }
+    Some(payload)
+}
+
+/// Parse a single push opcode at the start of `script`.
+///
+/// Returns `(pushed_bytes, bytes_consumed)`.
+fn parse_push(script: &[u8]) -> Option<(Vec<u8>, usize)> {
+    let op = *script.first()?;
+    match op {
+        0x00 => Some((Vec::new(), 1)), // OP_0
+        0x01..=0x4b => {
+            let n = op as usize;
+            if script.len() < 1 + n {
+                return None;
+            }
+            Some((script[1..1 + n].to_vec(), 1 + n))
+        }
+        0x4c => {
+            // OP_PUSHDATA1
+            let n = *script.get(1)? as usize;
+            if script.len() < 2 + n {
+                return None;
+            }
+            Some((script[2..2 + n].to_vec(), 2 + n))
+        }
+        0x4d => {
+            // OP_PUSHDATA2 (little-endian length)
+            let n = u16::from_le_bytes([*script.get(1)?, *script.get(2)?]) as usize;
+            if script.len() < 3 + n {
+                return None;
+            }
+            Some((script[3..3 + n].to_vec(), 3 + n))
+        }
+        0x4e => {
+            // OP_PUSHDATA4 (little-endian length)
+            let n = u32::from_le_bytes([
+                *script.get(1)?,
+                *script.get(2)?,
+                *script.get(3)?,
+                *script.get(4)?,
+            ]) as usize;
+            if script.len() < 5 + n {
+                return None;
+            }
+            Some((script[5..5 + n].to_vec(), 5 + n))
+        }
+        _ => None,
+    }
+}
+
+/// Parse the pushes of a carrier scriptSig in order.
+///
+/// The DEPLOY carrier scriptSig is:
+/// ```text
+/// <chunk_index: u8> <chunk_data> <signature> <redeem_script>
+/// ```
+/// We return the raw pushed byte-strings in order so the caller can identify
+/// `chunk_index` (first push, single byte) and `chunk_data` (second push).
+pub fn parse_script_pushes(mut script: &[u8]) -> Vec<Vec<u8>> {
+    let mut out = Vec::new();
+    while !script.is_empty() {
+        match parse_push(script) {
+            Some((payload, consumed)) => {
+                out.push(payload);
+                script = &script[consumed..];
+            }
+            None => break,
+        }
+    }
+    out
+}
+
+/// Extract a carrier chunk from a scriptSig.
+///
+/// Returns `(chunk_index, chunk_data)` per ADR 0003 / protocol-v0 §7:
+/// first push is the 1-byte `chunk_index`, second push is the chunk bytes.
+pub fn chunk_from_script_sig(script: &[u8]) -> Option<(u8, Vec<u8>)> {
+    let pushes = parse_script_pushes(script);
+    if pushes.len() < 2 {
+        return None;
+    }
+    let index = match pushes[0].as_slice() {
+        [b] => *b,
+        _ => return None,
+    };
+    Some((index, pushes[1].clone()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -207,5 +320,36 @@ mod tests {
         let hash = CodeHash([0u8; 32]);
         let result = reconstruct(&[], 0, 0, &hash);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn op_return_data_extraction() {
+        // OP_RETURN <0x01 0x02 0x03>
+        assert_eq!(
+            extract_op_return_data(&[0x6a, 0x03, 0x01, 0x02, 0x03]),
+            Some(vec![1, 2, 3])
+        );
+        // Bare OP_RETURN
+        assert_eq!(extract_op_return_data(&[0x6a]), Some(vec![]));
+        // Not OP_RETURN
+        assert_eq!(extract_op_return_data(&[0x51, 0x03]), None);
+        // OP_RETURN with PUSHDATA1
+        let mut s = vec![0x6a, 0x4c, 0x80];
+        s.extend(vec![0xAA; 0x80]);
+        assert_eq!(extract_op_return_data(&s), Some(vec![0xAA; 0x80]));
+    }
+
+    #[test]
+    fn chunk_from_script_sig_parses_pushes() {
+        // <0x02> <0xAA 0xBB 0xCC> <sig...> <redeem...>
+        let script = [
+            0x01, 0x02, // push 1 byte: chunk_index = 2
+            0x03, 0xAA, 0xBB, 0xCC, // push 3 bytes: chunk_data
+            0x01, 0x30, // (fake signature)
+            0x01, 0x51, // (fake redeem)
+        ];
+        let (idx, data) = chunk_from_script_sig(&script).unwrap();
+        assert_eq!(idx, 2);
+        assert_eq!(data, vec![0xAA, 0xBB, 0xCC]);
     }
 }

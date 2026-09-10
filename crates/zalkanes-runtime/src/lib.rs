@@ -5,6 +5,10 @@
 //! **Consensus-critical.** See `docs/wasm-consensus.md` and ADR 0005.
 //! Do NOT upgrade Wasmi without opening a protocol-version ADR and
 //! regenerating `test-vectors/wasm/fuel-v0.json`.
+//!
+//! Execution reads through a [`StateStore`] and buffers writes in a local
+//! overlay; writes are returned to the caller for atomic commit, and are
+//! discarded on trap/fuel exhaustion.
 
 #![forbid(unsafe_code)]
 
@@ -13,16 +17,37 @@ use zalkanes_core::{
     consensus::*,
     types::{BlockHeight, ContractId, TxId},
 };
-use zalkanes_state::MemoryState;
+use zalkanes_state::StateStore;
 
 /// Result of a single contract call.
 #[derive(Debug, Clone)]
 pub enum CallResult {
-    Success { output: Vec<u8>, fuel_used: u64 },
-    Trap { reason: String, fuel_used: u64 },
-    FuelExhausted { fuel_used: u64 },
-    InvalidModule { reason: String },
+    Success {
+        output: Vec<u8>,
+        fuel_used: u64,
+        /// Storage writes produced by this call (committed on success).
+        writes: Vec<StorageWrite>,
+    },
+    Trap {
+        reason: String,
+        fuel_used: u64,
+    },
+    FuelExhausted {
+        fuel_used: u64,
+    },
+    InvalidModule {
+        reason: String,
+    },
     ContractNotFound,
+}
+
+/// A single storage mutation produced by contract execution.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StorageWrite {
+    /// (contract_id, key, value)
+    Set(ContractId, Vec<u8>, Vec<u8>),
+    /// (contract_id, key)
+    Delete(ContractId, Vec<u8>),
 }
 
 /// Context provided to a contract during execution.
@@ -39,8 +64,6 @@ pub struct CallContext {
 }
 
 /// Validate a WASM module against the v0 feature set.
-///
-/// Returns `Ok(())` if the module passes, `Err(reason)` if it fails.
 pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
     if wasm.len() as u32 > MAX_CODE_BYTES {
         return Err(format!(
@@ -54,16 +77,21 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-struct HostState {
+struct HostState<'a> {
     contract_id: ContractId,
     input: Vec<u8>,
     output: Vec<u8>,
     block_height: BlockHeight,
-    state_overlay: MemoryState,
+    /// Write buffer: reads consult this first, then the base store.
+    overlay: std::collections::BTreeMap<Vec<u8>, Option<Vec<u8>>>,
+    base: &'a dyn StateStore,
 }
 
-/// Execute a contract call against a mutable state overlay.
-pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
+/// Execute a contract call against a state store, buffering writes.
+///
+/// On success, the returned [`CallResult::Success`] carries `writes` that the
+/// caller MUST commit atomically. On trap/fuel exhaustion, writes are discarded.
+pub fn execute(ctx: CallContext, state: &dyn StateStore) -> CallResult {
     if ctx.depth > MAX_CALL_DEPTH {
         return CallResult::Trap {
             reason: format!(
@@ -74,8 +102,8 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
         };
     }
 
-    let wasm = match state.contracts.get(&ctx.contract_id.0) {
-        Some((_, code)) => code.clone(),
+    let wasm = match state.get_contract(&ctx.contract_id) {
+        Some((_, code)) => code,
         None => return CallResult::ContractNotFound,
     };
 
@@ -83,7 +111,6 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
     let mut config = Config::default();
     config.consume_fuel(true);
     config.compilation_mode(CompilationMode::Eager);
-
     let engine = Engine::new(&config);
 
     let module = match Module::new(&engine, &wasm) {
@@ -95,21 +122,13 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
         }
     };
 
-    // Copy storage for overlay — writes go here and are promoted on success
-    let mut overlay = MemoryState::new();
-    for (k, v) in &state.contracts {
-        overlay.contracts.insert(*k, v.clone());
-    }
-    for (k, v) in &state.storage {
-        overlay.storage.insert(k.clone(), v.clone());
-    }
-
     let host = HostState {
         contract_id: ctx.contract_id,
         input: ctx.input.clone(),
         output: Vec::new(),
         block_height: ctx.block_height,
-        state_overlay: overlay,
+        overlay: Default::default(),
+        base: state,
     };
 
     let mut store = Store::new(&engine, host);
@@ -148,11 +167,21 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
             let fuel_remaining = store.get_fuel().unwrap_or(0);
             let fuel_used = ctx.fuel_limit.saturating_sub(fuel_remaining);
             let output = store.data().output.clone();
-            // Promote overlay writes into parent state
-            for (k, v) in std::mem::take(&mut store.data_mut().state_overlay.storage) {
-                state.storage.insert(k, v);
+
+            // Materialize overlay writes.
+            let mut writes = Vec::new();
+            let contract_id = store.data().contract_id;
+            for (key, val) in std::mem::take(&mut store.data_mut().overlay) {
+                match val {
+                    Some(v) => writes.push(StorageWrite::Set(contract_id, key, v)),
+                    None => writes.push(StorageWrite::Delete(contract_id, key)),
+                }
             }
-            CallResult::Success { output, fuel_used }
+            CallResult::Success {
+                output,
+                fuel_used,
+                writes,
+            }
         }
         Ok(code) => {
             let fuel_remaining = store.get_fuel().unwrap_or(0);
@@ -178,7 +207,7 @@ pub fn execute(ctx: CallContext, state: &mut MemoryState) -> CallResult {
     }
 }
 
-fn build_linker(engine: &Engine) -> Linker<HostState> {
+fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
     let mut linker = Linker::new(engine);
 
     // storage_get(key_ptr, key_len, val_ptr) -> i32 (value len, or -1 if missing)
@@ -186,7 +215,7 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
         .func_wrap(
             "env",
             "storage_get",
-            |mut caller: wasmi::Caller<'_, HostState>,
+            |mut caller: wasmi::Caller<'_, HostState<'a>>,
              key_ptr: i32,
              key_len: i32,
              val_ptr: i32|
@@ -204,8 +233,13 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                     }
                     data[s..e].to_vec()
                 };
-                let cid = caller.data().contract_id;
-                let val = caller.data().state_overlay.storage_get(&cid, &key);
+                // Consult overlay first.
+                let val = if let Some(v) = caller.data().overlay.get(&key) {
+                    v.clone()
+                } else {
+                    let cid = caller.data().contract_id;
+                    caller.data().base.storage_get(&cid, &key)
+                };
                 match val {
                     None => -1,
                     Some(v) => {
@@ -228,7 +262,7 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
         .func_wrap(
             "env",
             "storage_set",
-            |mut caller: wasmi::Caller<'_, HostState>,
+            |mut caller: wasmi::Caller<'_, HostState<'a>>,
              key_ptr: i32,
              key_len: i32,
              val_ptr: i32,
@@ -255,8 +289,32 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
                     }
                     (data[ks..ke].to_vec(), data[vs..ve].to_vec())
                 };
-                let cid = caller.data().contract_id;
-                caller.data_mut().state_overlay.storage_set(cid, key, val);
+                caller.data_mut().overlay.insert(key, Some(val));
+                0
+            },
+        )
+        .ok();
+
+    // storage_delete(key_ptr, key_len) -> i32
+    linker
+        .func_wrap(
+            "env",
+            "storage_delete",
+            |mut caller: wasmi::Caller<'_, HostState<'a>>, key_ptr: i32, key_len: i32| -> i32 {
+                let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
+                    Some(m) => m,
+                    None => return -1,
+                };
+                let key = {
+                    let data = mem.data(&caller);
+                    let s = key_ptr as usize;
+                    let e = s.saturating_add(key_len as usize);
+                    if e > data.len() {
+                        return -1;
+                    }
+                    data[s..e].to_vec()
+                };
+                caller.data_mut().overlay.insert(key, None);
                 0
             },
         )
@@ -267,7 +325,7 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
         .func_wrap(
             "env",
             "output_write",
-            |mut caller: wasmi::Caller<'_, HostState>, ptr: i32, len: i32| -> i32 {
+            |mut caller: wasmi::Caller<'_, HostState<'a>>, ptr: i32, len: i32| -> i32 {
                 if len as u32 > MAX_RETURN_DATA_BYTES {
                     return -1;
                 }
@@ -295,7 +353,7 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
         .func_wrap(
             "env",
             "context_block_height",
-            |mut caller: wasmi::Caller<'_, HostState>, out_ptr: i32| -> i32 {
+            |mut caller: wasmi::Caller<'_, HostState<'a>>, out_ptr: i32| -> i32 {
                 let height = caller.data().block_height;
                 let mem = match caller.get_export("memory").and_then(|e| e.into_memory()) {
                     Some(m) => m,
@@ -317,7 +375,7 @@ fn build_linker(engine: &Engine) -> Linker<HostState> {
         .func_wrap(
             "env",
             "input_read",
-            |mut caller: wasmi::Caller<'_, HostState>,
+            |mut caller: wasmi::Caller<'_, HostState<'a>>,
              out_ptr: i32,
              offset: i32,
              len: i32|

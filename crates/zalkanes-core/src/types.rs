@@ -10,7 +10,7 @@ pub struct BlockHash(pub [u8; 32]);
 pub type BlockHeight = u32;
 
 /// ZIP-244 transaction identifier (32 bytes, internal byte order).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct TxId(pub [u8; 32]);
 
 /// SHA-256 hash of raw WASM bytes.
@@ -32,6 +32,27 @@ pub struct StateRoot(pub [u8; 32]);
 pub struct BlockRef {
     pub height: BlockHeight,
     pub hash: BlockHash,
+}
+
+/// The result of executing one contract CALL from an indexed Zcash transaction.
+///
+/// Persisted by the indexer and exposed over RPC via `zalkanes_getExecution`.
+/// Not part of the consensus state root; derived from canonical block data.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Execution {
+    pub txid: TxId,
+    pub contract_id: ContractId,
+    pub opcode: u16,
+    pub success: bool,
+    pub fuel_used: u64,
+    /// Return data bytes (empty on failure).
+    pub return_data: Vec<u8>,
+    /// Trap reason, if any.
+    pub error: Option<String>,
+    pub state_root_before: StateRoot,
+    pub state_root_after: StateRoot,
+    pub block_height: BlockHeight,
+    pub block_hash: BlockHash,
 }
 
 /// Zcash network.

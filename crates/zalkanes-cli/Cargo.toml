@@ -15,6 +15,7 @@ zalkanes-indexer = { workspace = true }
 zalkanes-rpc     = { workspace = true }
 zalkanes-tx      = { workspace = true }
 zalkanes-build   = { workspace = true }
+zalkanes-state   = { workspace = true }
 anyhow           = { workspace = true }
 tokio            = { workspace = true }
 clap             = { workspace = true }
@@ -22,3 +23,4 @@ tracing          = { workspace = true }
 tracing-subscriber = { workspace = true }
 serde_json       = { workspace = true }
 hex              = { workspace = true }
+reqwest          = { workspace = true }

@@ -1,10 +1,18 @@
 //! # zalkanes-rpc
 //!
 //! JSON-RPC 2.0 server exposing Zalkanes node state.
-//! See `docs/rpc.md` for the full API.
 //!
-//! Backed by an in-memory state handle for v0; reads go through a read-only
-//! snapshot. The server never mutates state directly.
+//! The handler reads through a shared [`StateStore`] handle — the SAME backend
+//! the indexer writes to. It never creates its own unrelated state.
+//!
+//! Methods:
+//! - `zalkanes_getInfo` — indexed height, chain tip, state root, syncing flag
+//! - `zalkanes_getStateRoot` — authoritative current state root
+//! - `zalkanes_getContract` — contract metadata by ContractId
+//! - `zalkanes_getCode` — raw WASM hex by ContractId
+//! - `zalkanes_view` — read-only call against current indexed state
+//! - `zalkanes_getExecution` — execution record by txid
+//! - `zalkanes_getBlockExecutions` — executions at a height
 
 #![forbid(unsafe_code)]
 
@@ -13,8 +21,14 @@ use std::sync::{Arc, RwLock};
 
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use zalkanes_core::types::{BlockHeight, BlockRef, Network};
-use zalkanes_state::MemoryState;
+use zalkanes_core::types::{
+    BlockHash, BlockHeight, BlockRef, ContractId, Execution, Network, TxId,
+};
+use zalkanes_runtime::{execute, CallContext, CallResult};
+use zalkanes_state::StateStore;
+
+/// Shared handle to the authoritative state backend.
+pub type SharedState = Arc<RwLock<Box<dyn StateStore>>>;
 
 /// Response for `zalkanes_getInfo`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,7 +37,9 @@ pub struct InfoResponse {
     pub network: String,
     pub indexed_height: Option<BlockHeight>,
     pub chain_tip_height: Option<BlockHeight>,
+    pub indexed_block_hash: Option<String>,
     pub state_root: String,
+    pub syncing: bool,
 }
 
 /// Response for `zalkanes_getContract`.
@@ -34,41 +50,41 @@ pub struct ContractResponse {
     pub code_size: usize,
 }
 
+/// Response for `zalkanes_getCode`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CodeResponse {
+    pub contract_id: String,
+    pub code_hash: String,
+    pub code_hex: String,
+}
+
 /// Response for `zalkanes_view`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ViewResponse {
+    pub success: bool,
     pub output_hex: String,
     pub fuel_used: u64,
-    pub success: bool,
+    pub indexed_height: Option<BlockHeight>,
+    pub state_root: String,
     pub error: Option<String>,
 }
 
 /// Shared, thread-safe node state backing the RPC server.
 #[derive(Clone)]
 pub struct RpcHandler {
-    state: Arc<RwLock<MemoryState>>,
-    indexed_height: Arc<RwLock<Option<BlockHeight>>>,
+    state: SharedState,
     chain_tip: Arc<RwLock<Option<BlockRef>>>,
     network: Network,
 }
 
 impl RpcHandler {
-    pub fn new(network: Network) -> Self {
+    /// Build a handler from the SAME state handle the indexer uses.
+    pub fn new(network: Network, state: SharedState) -> Self {
         Self {
-            state: Arc::new(RwLock::new(MemoryState::new())),
-            indexed_height: Arc::new(RwLock::new(None)),
+            state,
             chain_tip: Arc::new(RwLock::new(None)),
             network,
         }
-    }
-
-    /// Shared handles for an indexer to feed in height + tip as it syncs.
-    pub fn state_handle(&self) -> Arc<RwLock<MemoryState>> {
-        self.state.clone()
-    }
-
-    pub fn indexed_height_handle(&self) -> Arc<RwLock<Option<BlockHeight>>> {
-        self.indexed_height.clone()
     }
 
     pub fn chain_tip_handle(&self) -> Arc<RwLock<Option<BlockRef>>> {
@@ -79,47 +95,171 @@ impl RpcHandler {
         self.network
     }
 
+    fn with_state<T>(&self, f: impl FnOnce(&dyn StateStore) -> T) -> T {
+        let guard = self.state.read().expect("state lock poisoned");
+        f(&**guard)
+    }
+
     pub fn get_info(&self) -> InfoResponse {
-        let state = self.state.read().expect("state lock poisoned");
-        let root = state.compute_root();
-        let indexed_height = *self.indexed_height.read().expect("height lock poisoned");
+        let (root, indexed_height, indexed_block_hash) =
+            self.with_state(|s| (s.compute_root(), s.indexed_height(), s.indexed_block_hash()));
         let chain_tip_height = self
             .chain_tip
             .read()
             .expect("tip lock poisoned")
             .map(|r| r.height);
+        let syncing = match (indexed_height, chain_tip_height) {
+            (Some(i), Some(t)) => i < t,
+            _ => true,
+        };
         InfoResponse {
             protocol_version: 0,
             network: self.network.zebra_name().to_string(),
             indexed_height,
             chain_tip_height,
+            indexed_block_hash: indexed_block_hash.map(|h| hex::encode(h.0)),
             state_root: root.as_hex(),
+            syncing,
         }
     }
 
     pub fn get_state_root(&self) -> String {
-        self.state
-            .read()
-            .expect("state lock poisoned")
-            .compute_root()
-            .as_hex()
+        self.with_state(|s| s.compute_root().as_hex())
     }
 
     pub fn get_contract(&self, contract_id_hex: &str) -> Option<ContractResponse> {
-        let id_bytes = hex::decode(contract_id_hex).ok()?;
-        if id_bytes.len() != 32 {
+        let id = parse_contract_id(contract_id_hex)?;
+        self.with_state(|s| {
+            s.get_contract(&id)
+                .map(|(code_hash, code)| ContractResponse {
+                    contract_id: contract_id_hex.to_string(),
+                    code_hash: code_hash.as_hex(),
+                    code_size: code.len(),
+                })
+        })
+    }
+
+    pub fn get_code(&self, contract_id_hex: &str) -> Option<CodeResponse> {
+        let id = parse_contract_id(contract_id_hex)?;
+        self.with_state(|s| {
+            s.get_contract(&id).map(|(code_hash, code)| CodeResponse {
+                contract_id: contract_id_hex.to_string(),
+                code_hash: code_hash.as_hex(),
+                code_hex: hex::encode(code),
+            })
+        })
+    }
+
+    /// Read-only execution against current indexed state. Writes are discarded.
+    pub fn view(&self, contract_id_hex: &str, opcode: u16, input: &[u8]) -> ViewResponse {
+        let id = match parse_contract_id(contract_id_hex) {
+            Some(id) => id,
+            None => {
+                return ViewResponse {
+                    success: false,
+                    output_hex: String::new(),
+                    fuel_used: 0,
+                    indexed_height: None,
+                    state_root: self.get_state_root(),
+                    error: Some("invalid contract id".to_string()),
+                }
+            }
+        };
+
+        let indexed_height = self.with_state(|s| s.indexed_height());
+        let state_root = self.get_state_root();
+
+        // Execute against a read-only snapshot of the store. Because `execute`
+        // only reads through `&dyn StateStore` and buffers writes, we can run it
+        // directly under the read lock and discard the returned writes.
+        let result = self.with_state(|s| {
+            let ctx = CallContext {
+                contract_id: id,
+                caller: None,
+                txid: TxId([0u8; 32]),
+                block_height: s.indexed_height().unwrap_or(0),
+                opcode,
+                input: input.to_vec(),
+                fuel_limit: zalkanes_core::consensus::MAX_FUEL_PER_CALL,
+                depth: 0,
+            };
+            execute(ctx, s)
+        });
+
+        match result {
+            CallResult::Success {
+                output, fuel_used, ..
+            } => ViewResponse {
+                success: true,
+                output_hex: hex::encode(output),
+                fuel_used,
+                indexed_height,
+                state_root,
+                error: None,
+            },
+            CallResult::Trap { reason, fuel_used } => ViewResponse {
+                success: false,
+                output_hex: String::new(),
+                fuel_used,
+                indexed_height,
+                state_root,
+                error: Some(reason),
+            },
+            CallResult::FuelExhausted { fuel_used } => ViewResponse {
+                success: false,
+                output_hex: String::new(),
+                fuel_used,
+                indexed_height,
+                state_root,
+                error: Some("fuel exhausted".to_string()),
+            },
+            CallResult::InvalidModule { reason } => ViewResponse {
+                success: false,
+                output_hex: String::new(),
+                fuel_used: 0,
+                indexed_height,
+                state_root,
+                error: Some(reason),
+            },
+            CallResult::ContractNotFound => ViewResponse {
+                success: false,
+                output_hex: String::new(),
+                fuel_used: 0,
+                indexed_height,
+                state_root,
+                error: Some("contract not found".to_string()),
+            },
+        }
+    }
+
+    pub fn get_execution(&self, txid_hex: &str) -> Option<Execution> {
+        let bytes = hex::decode(txid_hex).ok()?;
+        if bytes.len() != 32 {
             return None;
         }
         let mut id = [0u8; 32];
-        id.copy_from_slice(&id_bytes);
-        let state = self.state.read().expect("state lock poisoned");
-        let (code_hash, code) = state.contracts.get(&id)?;
-        Some(ContractResponse {
-            contract_id: contract_id_hex.to_string(),
-            code_hash: code_hash.as_hex(),
-            code_size: code.len(),
-        })
+        id.copy_from_slice(&bytes);
+        let txid = TxId(id);
+        self.with_state(|s| s.execution(&txid))
     }
+
+    pub fn get_block_executions(&self, height: BlockHeight) -> Vec<Execution> {
+        self.with_state(|s| s.executions_at_height(height))
+    }
+
+    pub fn get_indexed_block_hash(&self) -> Option<BlockHash> {
+        self.with_state(|s| s.indexed_block_hash())
+    }
+}
+
+fn parse_contract_id(s: &str) -> Option<ContractId> {
+    let bytes = hex::decode(s).ok()?;
+    if bytes.len() != 32 {
+        return None;
+    }
+    let mut id = [0u8; 32];
+    id.copy_from_slice(&bytes);
+    Some(ContractId(id))
 }
 
 /// Start the JSON-RPC server and return a handle that resolves when it stops.
@@ -132,16 +272,14 @@ pub async fn serve(addr: SocketAddr, handler: RpcHandler) -> Result<()> {
     let server = Server::builder().build(addr).await?;
     let mut module = RpcModule::new(handler);
 
-    module.register_method("zalkanes_getInfo", |_params: Params, ctx, _ext| {
+    module.register_method("zalkanes_getInfo", |_p: Params, ctx, _ext| {
         let h: &RpcHandler = ctx;
-        let info = h.get_info();
-        Ok::<_, jsonrpsee::types::ErrorObjectOwned>(info)
+        Ok::<_, jsonrpsee::types::ErrorObjectOwned>(h.get_info())
     })?;
 
-    module.register_method("zalkanes_getStateRoot", |_params: Params, ctx, _ext| {
+    module.register_method("zalkanes_getStateRoot", |_p: Params, ctx, _ext| {
         let h: &RpcHandler = ctx;
-        let root = h.get_state_root();
-        Ok::<_, jsonrpsee::types::ErrorObjectOwned>(root)
+        Ok::<_, jsonrpsee::types::ErrorObjectOwned>(h.get_state_root())
     })?;
 
     module.register_method(
@@ -153,6 +291,49 @@ pub async fn serve(addr: SocketAddr, handler: RpcHandler) -> Result<()> {
         },
     )?;
 
+    module.register_method(
+        "zalkanes_getCode",
+        |params: Params, ctx, _ext| -> RpcResult<Option<CodeResponse>> {
+            let h: &RpcHandler = ctx;
+            let id: String = params.one()?;
+            Ok(h.get_code(&id))
+        },
+    )?;
+
+    module.register_method(
+        "zalkanes_view",
+        |params: Params, ctx, _ext| -> RpcResult<ViewResponse> {
+            let h: &RpcHandler = ctx;
+            let arr: Vec<serde_json::Value> = params.parse()?;
+            let id = arr.first().and_then(|v| v.as_str()).unwrap_or("");
+            let opcode = arr.get(1).and_then(|v| v.as_u64()).unwrap_or(0) as u16;
+            let input = arr
+                .get(2)
+                .and_then(|v| v.as_str())
+                .map(|s| hex::decode(s).unwrap_or_default())
+                .unwrap_or_default();
+            Ok(h.view(id, opcode, &input))
+        },
+    )?;
+
+    module.register_method(
+        "zalkanes_getExecution",
+        |params: Params, ctx, _ext| -> RpcResult<Option<Execution>> {
+            let h: &RpcHandler = ctx;
+            let id: String = params.one()?;
+            Ok(h.get_execution(&id))
+        },
+    )?;
+
+    module.register_method(
+        "zalkanes_getBlockExecutions",
+        |params: Params, ctx, _ext| -> RpcResult<Vec<Execution>> {
+            let h: &RpcHandler = ctx;
+            let height: u32 = params.one()?;
+            Ok(h.get_block_executions(height))
+        },
+    )?;
+
     let handle = server.start(module);
     handle.stopped().await;
     Ok(())
@@ -161,26 +342,31 @@ pub async fn serve(addr: SocketAddr, handler: RpcHandler) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use zalkanes_state::MemoryState;
 
-    #[test]
-    fn get_info_returns_current_state() {
-        let handler = RpcHandler::new(Network::Regtest);
-        let info = handler.get_info();
-        assert_eq!(info.protocol_version, 0);
-        assert_eq!(info.network, "regtest");
-        assert!(info.indexed_height.is_none());
-        assert!(info.chain_tip_height.is_none());
+    fn test_handler() -> RpcHandler {
+        let state: SharedState = Arc::new(RwLock::new(Box::new(MemoryState::new())));
+        RpcHandler::new(Network::Regtest, state)
     }
 
     #[test]
-    fn chain_tip_is_reported() {
-        let handler = RpcHandler::new(Network::Mainnet);
-        *handler.chain_tip_handle().write().unwrap() = Some(BlockRef {
-            height: 3_478_274,
-            hash: zalkanes_core::types::BlockHash([0u8; 32]),
+    fn get_info_reports_syncing() {
+        let h = test_handler();
+        let info = h.get_info();
+        assert_eq!(info.protocol_version, 0);
+        assert_eq!(info.network, "regtest");
+        assert!(info.indexed_height.is_none());
+        assert!(info.syncing);
+    }
+
+    #[test]
+    fn chain_tip_reported() {
+        let h = test_handler();
+        *h.chain_tip_handle().write().unwrap() = Some(BlockRef {
+            height: 10,
+            hash: BlockHash([0u8; 32]),
         });
-        let info = handler.get_info();
-        assert_eq!(info.chain_tip_height, Some(3_478_274));
-        assert_eq!(info.network, "main");
+        let info = h.get_info();
+        assert_eq!(info.chain_tip_height, Some(10));
     }
 }

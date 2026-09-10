@@ -36,10 +36,12 @@ authors      = ["Zalkanes Contributors"]
 # WASM runtime — consensus-critical; pin exact version + commit
 wasmi = { version = "=2.0.0" }
 
-# Zcash libraries
-zcash_primitives  = { version = "=0.30.1", default-features = false }
-zcash_protocol    = { version = "=0.10.6", default-features = false }
-zcash_transparent = { version = "=0.10.0", default-features = false }
+# Zcash libraries (canonical block/transaction parsing — consensus-critical)
+# `std` without `circuits` keeps heavy zk-SNARK proof deps out of the build;
+# block/tx deserialization does not need them.
+zcash_primitives  = { version = "=0.30.1", default-features = false, features = ["std"] }
+zcash_protocol    = { version = "=0.10.6", default-features = false, features = ["std"] }
+zcash_transparent = { version = "=0.10.0", default-features = false, features = ["std"] }
 zcash_address     = { version = "=0.6.0",  default-features = false }
 
 # Storage
@@ -59,7 +61,7 @@ jsonrpsee      = { version = "=0.24.3", features = ["server", "client"] }
 reqwest        = { version = "=0.12.7", default-features = false, features = ["json", "rustls-tls", "blocking"] }
 
 # CLI
-clap = { version = "=4.5.18", features = ["derive"] }
+clap = { version = "=4.5.18", features = ["derive", "env"] }
 
 # Logging / metrics
 tracing            = { version = "=0.1.40" }
