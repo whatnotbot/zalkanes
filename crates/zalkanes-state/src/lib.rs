@@ -600,9 +600,27 @@ impl RocksState {
         let mut opts = rocksdb::Options::default();
         opts.create_if_missing(true);
         opts.set_keep_log_file_num(4);
-        let db = rocksdb::DB::open(&opts, path)
-            .with_context(|| format!("failed to open RocksDB at {}", path.display()))?;
-        Ok(Self { db })
+
+        // During a rolling deploy the previous container may still hold the
+        // RocksDB lock briefly. Retry with backoff rather than crashing.
+        for _ in 0..60 {
+            match rocksdb::DB::open(&opts, path) {
+                Ok(db) => return Ok(Self { db }),
+                Err(e) => {
+                    let s = e.to_string();
+                    if s.contains("Resource temporarily unavailable") || s.contains("lock") {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        continue;
+                    }
+                    return Err(e)
+                        .with_context(|| format!("failed to open RocksDB at {}", path.display()));
+                }
+            }
+        }
+        Err(anyhow::anyhow!(
+            "failed to open RocksDB at {} (lock held too long)",
+            path.display()
+        ))
     }
 
     pub fn raw_get(&self, key: &[u8]) -> Option<Vec<u8>> {
