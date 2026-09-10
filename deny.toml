@@ -1,0 +1,24 @@
+deny = ["license", "bans", "advisories", "sources"]
+
+[licenses]
+allow = ["MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "ISC", "BSD-2-Clause", "BSD-3-Clause", "Unicode-DFS-2016", "CC0-1.0", "Zlib"]
+deny = []
+copyleft = "deny"
+unlicensed = "deny"
+
+[bans]
+multiple-versions = "warn"
+deny = [
+  # Prevent accidental inclusion of Bitcoin-specific crates
+  { name = "bitcoin" },
+  { name = "ordinals" },
+]
+
+[advisories]
+vulnerability = "deny"
+unmaintained = "warn"
+yanked = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

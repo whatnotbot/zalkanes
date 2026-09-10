@@ -1,0 +1,36 @@
+services:
+  zebra-regtest:
+    image: zfnd/zebra:v6.3.0
+    command:
+      - --config=/etc/zebra/zebra.toml
+    volumes:
+      - ./scripts/zebra-regtest.toml:/etc/zebra/zebra.toml:ro
+      - zebra-data:/var/lib/zebra
+    ports:
+      - "18232:18232"   # regtest RPC
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "-X", "POST", "-H", "Content-Type: application/json",
+             "--data", '{"jsonrpc":"2.0","id":1,"method":"getblockchaininfo","params":[]}',
+             "http://localhost:18232"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  zalkanes:
+    build: .
+    depends_on:
+      zebra-regtest:
+        condition: service_healthy
+    environment:
+      ZEBRA_RPC_URL: http://zebra-regtest:18232
+      ZALKANES_NETWORK: regtest
+      RUST_LOG: zalkanes=debug
+    volumes:
+      - zalkanes-data:/var/lib/zalkanes
+    ports:
+      - "3030:3030"   # Zalkanes JSON-RPC
+
+volumes:
+  zebra-data:
+  zalkanes-data:

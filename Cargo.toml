@@ -1,0 +1,117 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/zalkanes-core",
+    "crates/zalkanes-chain",
+    "crates/zalkanes-protocol",
+    "crates/zalkanes-carrier",
+    "crates/zalkanes-runtime",
+    "crates/zalkanes-state",
+    "crates/zalkanes-indexer",
+    "crates/zalkanes-rpc",
+    "crates/zalkanes-sdk",
+    "crates/zalkanes-build",
+    "crates/zalkanes-tx",
+    "crates/zalkanes-testkit",
+    "crates/zalkanes-cli",
+    "contracts/counter",
+    "contracts/key-value",
+    "contracts/token",
+    "contracts/caller",
+]
+# Contract crates are wasm32-only cdylib targets.
+# Build them with: cargo build --target wasm32-unknown-unknown -p counter
+# They are excluded from default host builds to avoid no_std allocator errors.
+default-members = [
+    "crates/zalkanes-core",
+    "crates/zalkanes-chain",
+    "crates/zalkanes-protocol",
+    "crates/zalkanes-carrier",
+    "crates/zalkanes-runtime",
+    "crates/zalkanes-state",
+    "crates/zalkanes-indexer",
+    "crates/zalkanes-rpc",
+    "crates/zalkanes-sdk",
+    "crates/zalkanes-build",
+    "crates/zalkanes-tx",
+    "crates/zalkanes-testkit",
+    "crates/zalkanes-cli",
+]
+
+[workspace.package]
+version      = "0.1.0"
+edition      = "2021"
+rust-version = "1.88"
+license      = "MIT"
+repository   = "https://github.com/whatnotbot/zalkanes"
+authors      = ["Zalkanes Contributors"]
+
+# ── consensus-critical pins ──────────────────────────────────────────────────
+# ANY change to these requires a new protocol version + test vectors.
+[workspace.dependencies]
+
+# WASM runtime — consensus-critical; pin exact version + commit
+wasmi = { version = "=2.0.0" }
+
+# Zcash libraries
+zcash_primitives  = { version = "=0.30.1", default-features = false }
+zcash_protocol    = { version = "=0.10.6", default-features = false }
+zcash_transparent = { version = "=0.10.0", default-features = false }
+zcash_address     = { version = "=0.6.0",  default-features = false }
+
+# Storage
+rocksdb = { version = "=0.22.0", default-features = false, features = ["snappy"] }
+
+# Serialization / hashing
+serde          = { version = "=1.0.210", features = ["derive"] }
+serde_json     = { version = "=1.0.128" }
+bincode        = { version = "=1.3.3" }
+blake2b_simd   = { version = "=1.0.2" }
+sha2           = { version = "=0.10.8" }
+hex            = { version = "=0.4.3" }
+
+# Async / RPC
+tokio          = { version = "=1.40.0", features = ["full"] }
+jsonrpsee      = { version = "=0.24.3", features = ["server", "client"] }
+reqwest        = { version = "=0.12.7", default-features = false, features = ["json", "rustls-tls", "blocking"] }
+
+# CLI
+clap = { version = "=4.5.18", features = ["derive"] }
+
+# Logging / metrics
+tracing            = { version = "=0.1.40" }
+tracing-subscriber = { version = "=0.3.18", features = ["env-filter"] }
+prometheus         = { version = "=0.13.4" }
+
+# Error handling
+anyhow    = { version = "=1.0.89" }
+thiserror = { version = "=1.0.64" }
+
+# Testing / fuzzing
+proptest  = { version = "=1.5.0" }
+arbitrary = { version = "=1.3.2", features = ["derive"] }
+
+# Internal workspace crates
+zalkanes-core     = { path = "crates/zalkanes-core" }
+zalkanes-chain    = { path = "crates/zalkanes-chain" }
+zalkanes-protocol = { path = "crates/zalkanes-protocol" }
+zalkanes-carrier  = { path = "crates/zalkanes-carrier" }
+zalkanes-runtime  = { path = "crates/zalkanes-runtime" }
+zalkanes-state    = { path = "crates/zalkanes-state" }
+zalkanes-indexer  = { path = "crates/zalkanes-indexer" }
+zalkanes-rpc      = { path = "crates/zalkanes-rpc" }
+zalkanes-sdk      = { path = "crates/zalkanes-sdk" }
+zalkanes-build    = { path = "crates/zalkanes-build" }
+zalkanes-tx       = { path = "crates/zalkanes-tx" }
+zalkanes-testkit  = { path = "crates/zalkanes-testkit" }
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+# Note: panic="abort" is intentionally NOT set here — it would break
+# cargo test --release. Set it only in the Dockerfile build via RUSTFLAGS.
+
+[profile.dev]
+opt-level = 0
+debug     = true

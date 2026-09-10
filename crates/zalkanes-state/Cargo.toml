@@ -1,0 +1,13 @@
+[package]
+name = "zalkanes-state"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zalkanes-core = { workspace = true }
+rocksdb = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+blake2b_simd = { workspace = true }
+tracing = { workspace = true }

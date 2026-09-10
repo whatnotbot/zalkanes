@@ -1,0 +1,17 @@
+[package]
+name = "zalkanes-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zalkanes-core     = { workspace = true }
+zalkanes-chain    = { workspace = true }
+zalkanes-protocol = { workspace = true }
+zalkanes-carrier  = { workspace = true }
+zalkanes-runtime  = { workspace = true }
+zalkanes-state    = { workspace = true }
+anyhow            = { workspace = true }
+thiserror         = { workspace = true }
+tokio             = { workspace = true }
+tracing           = { workspace = true }

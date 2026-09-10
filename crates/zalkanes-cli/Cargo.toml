@@ -1,0 +1,24 @@
+[package]
+name = "zalkanes-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zalkanes"
+path = "src/main.rs"
+
+[dependencies]
+zalkanes-core    = { workspace = true }
+zalkanes-chain   = { workspace = true }
+zalkanes-indexer = { workspace = true }
+zalkanes-rpc     = { workspace = true }
+zalkanes-tx      = { workspace = true }
+zalkanes-build   = { workspace = true }
+anyhow           = { workspace = true }
+tokio            = { workspace = true }
+clap             = { workspace = true }
+tracing          = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde_json       = { workspace = true }
+hex              = { workspace = true }

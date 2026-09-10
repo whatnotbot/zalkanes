@@ -1,0 +1,17 @@
+[package]
+name = "token"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zalkanes-sdk = { path = "../../crates/zalkanes-sdk" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

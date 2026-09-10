@@ -1,0 +1,12 @@
+[package]
+name = "zalkanes-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zalkanes-core = { workspace = true }
+thiserror = { workspace = true }
+blake2b_simd = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }

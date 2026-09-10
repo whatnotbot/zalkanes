@@ -1,0 +1,17 @@
+[package]
+name = "zalkanes-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zalkanes-core     = { workspace = true }
+zalkanes-protocol = { workspace = true }
+zalkanes-carrier  = { workspace = true }
+zalkanes-runtime  = { workspace = true }
+zalkanes-state    = { workspace = true }
+zalkanes-indexer  = { workspace = true }
+anyhow            = { workspace = true }
+thiserror         = { workspace = true }
+sha2              = { workspace = true }
+hex               = { workspace = true }

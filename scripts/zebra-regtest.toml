@@ -1,0 +1,14 @@
+# Zebra regtest configuration for Zalkanes development
+[network]
+network = "Regtest"
+listen_addr = "0.0.0.0:18233"
+
+[rpc]
+listen_addr = "0.0.0.0:18232"
+# No auth for regtest — do NOT use this config in production
+
+[state]
+cache_dir = "/var/lib/zebra"
+
+[consensus]
+checkpoint_sync = false

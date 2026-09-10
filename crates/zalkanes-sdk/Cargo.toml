@@ -1,0 +1,15 @@
+[package]
+name = "zalkanes-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# No std — contracts target wasm32-unknown-unknown
+[features]
+default = []
+std     = []
+
+[dependencies]
+zalkanes-core = { workspace = true }
+
+[dev-dependencies]

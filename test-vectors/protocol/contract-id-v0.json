@@ -1,0 +1,26 @@
+[
+  {
+    "description": "counter deploy regtest",
+    "network": "regtest",
+    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "output_index": 0,
+    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "expected_contract_id_hex": "TO_BE_COMPUTED"
+  },
+  {
+    "description": "different output index yields different id",
+    "network": "regtest",
+    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "output_index": 1,
+    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "expected_contract_id_hex": "TO_BE_COMPUTED"
+  },
+  {
+    "description": "mainnet produces different id than regtest",
+    "network": "mainnet",
+    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+    "output_index": 0,
+    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "expected_contract_id_hex": "TO_BE_COMPUTED"
+  }
+]
