@@ -360,12 +360,15 @@ async fn indexing_loop(
         //    root, and a fresh reindex follows the identical path.
         if let Some(act) = config.activation_height() {
             if act > 1 {
+                // Seek to the last below-activation block, clamped to the
+                // current tip so a future activation height does not try to
+                // fetch a block that does not exist yet.
+                let target = (act - 1).min(tip.height);
                 let below = {
                     let g = store.read().unwrap();
-                    g.indexed_height().is_none_or(|h| h < act - 1)
+                    g.indexed_height().is_none_or(|h| h < target)
                 };
                 if below {
-                    let target = act - 1;
                     let hash = {
                         let s = source.clone();
                         tokio::task::spawn_blocking(move || s.block_hash(target)).await??

@@ -83,7 +83,12 @@ pub const MSG_CALL: u8 = 0x02;
 pub const MAINNET_ACTIVATION_HEIGHT: Option<u32> = None;
 
 /// Testnet activation height.
-pub const TESTNET_ACTIVATION_HEIGHT: Option<u32> = Some(1_000_000);
+///
+/// Frozen immediately before the controlled first testnet deployment (external
+/// testnet tip was 4,338,016 blocks, branch id `0x37a5165b` = Nu6.3, at freeze
+/// time). Chosen just above the current tip so Zalkanes never interprets
+/// arbitrary pre-activation testnet history as protocol messages.
+pub const TESTNET_ACTIVATION_HEIGHT: Option<u32> = Some(4_338_100);
 
 /// Regtest activation height.
 pub const REGTEST_ACTIVATION_HEIGHT: Option<u32> = Some(1);
