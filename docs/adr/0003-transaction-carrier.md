@@ -79,9 +79,12 @@ around a rejected mempool tx):
 | 520 B   | 636             | accepted + mined + reconstructed |
 | 1024 B (single push) | n/a | REJECTED: `PushSize` (per-push 520-byte limit) |
 | 1400 B (multi-push) | 1522 | accepted + mined + reconstructed |
+| 65536 B (47 carriers) | — | accepted + mined + reconstructed |
+| 262144 B (188 carriers) | — | accepted + mined + reconstructed |
 
 A single script push is capped at 520 bytes (`MAX_SCRIPT_ELEMENT_SIZE`). Chunk
 data must therefore be split into multiple ≤520-byte pushes within the scriptSig.
+Multi-carrier deployments scale to the protocol maximum (255 chunks).
 
 ## Chunk size
 

@@ -551,7 +551,7 @@ async fn contract_deploy(wasm_path: &str, wait: bool) -> Result<()> {
     let carrier_value = 1_000_000u64;
     let carrier_values = vec![carrier_value; chunk_count as usize];
     let prepare =
-        zalkanes_tx::build_prepare(&key, funding_outpoint, funding_value, &carrier_values)?;
+        zalkanes_tx::build_prepare(&key, &[(funding_outpoint, funding_value)], &carrier_values)?;
     let prepare_txid = prepare.txid_hex();
     let accepted = rpc.send_raw_transaction(&hex::encode(&prepare.bytes))?;
     if accepted != prepare_txid {

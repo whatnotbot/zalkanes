@@ -513,21 +513,27 @@ pub fn split_chunks(wasm: &[u8]) -> Result<Vec<Vec<u8>>> {
     Ok(chunks)
 }
 
-/// Build the PREPARE transaction: spend one funding UTXO, create N P2SH carrier
-/// outputs, and return change to the funding address.
+/// Build the PREPARE transaction: spend one or more funding UTXOs, create N
+/// P2SH carrier outputs, and return change to the funding address.
 pub fn build_prepare(
     funding_key: &SigningKey,
-    funding_outpoint: OutPoint,
-    funding_value: u64,
+    funding_utxos: &[(OutPoint, u64)],
     carrier_values: &[u64],
 ) -> Result<SignedTx> {
+    if funding_utxos.is_empty() {
+        bail!("no funding UTXOs");
+    }
     let pubkey = funding_key.compressed_pubkey();
     let redeem = redeem_script(&pubkey);
     let carrier_script = p2sh_script_pubkey(&redeem);
 
     let carrier_total: u64 = carrier_values.iter().sum();
+    let funding_total: u64 = funding_utxos.iter().map(|(_, v)| v).sum();
 
-    let in_size = input_serialized_size(p2pkh_script_sig_len());
+    let in_size: usize = funding_utxos
+        .iter()
+        .map(|_| input_serialized_size(p2pkh_script_sig_len()))
+        .sum();
     let out_size: usize = carrier_values
         .iter()
         .map(|_| output_serialized_size(carrier_script.len()))
@@ -535,10 +541,10 @@ pub fn build_prepare(
         + output_serialized_size(p2pkh_script_pubkey(&pubkey).len());
     let fee = zip317_fee_from_sizes(in_size, out_size);
 
-    let change = funding_value
+    let change = funding_total
         .checked_sub(carrier_total)
         .and_then(|v| v.checked_sub(fee))
-        .ok_or_else(|| anyhow::anyhow!("funding UTXO too small for PREPARE"))?;
+        .ok_or_else(|| anyhow::anyhow!("funding UTXOs too small for PREPARE"))?;
 
     let mut outputs = Vec::with_capacity(carrier_values.len() + 1);
     for v in carrier_values {
@@ -554,19 +560,20 @@ pub fn build_prepare(
         });
     }
 
-    build_transparent_tx(
-        &[SpendInput {
-            outpoint: funding_outpoint,
-            value: funding_value,
+    let inputs: Vec<SpendInput> = funding_utxos
+        .iter()
+        .map(|(outpoint, value)| SpendInput {
+            outpoint: outpoint.clone(),
+            value: *value,
             script_pubkey: p2pkh_script_pubkey(&pubkey),
             script_code: p2pkh_script_pubkey(&pubkey),
             kind: SpendKind::P2pkh {
                 key: funding_key.clone(),
             },
-        }],
-        &outputs,
-        0,
-    )
+        })
+        .collect();
+
+    build_transparent_tx(&inputs, &outputs, 0)
 }
 
 /// Build the DEPLOY transaction: spend N carrier UTXOs with WASM chunks in the
