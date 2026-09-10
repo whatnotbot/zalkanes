@@ -1,6 +1,6 @@
 # Zalkanes Public Testnet Activation — Milestone 2
 
-Status: in progress (provisioning + acceptance in flight)
+Status: **complete** (all acceptance evidence verified)
 
 ## Frozen consensus parameters
 
@@ -42,5 +42,29 @@ the empty root).
 
 ## Acceptance evidence
 
-*(filled in as the acceptance sequence executes: PREPARE → DEPLOY → CALL×2 →
-view get()==2 → restart persistence → fresh reindex identical state root.)*
+| Step | Value |
+|------|-------|
+| **PREPARE txid** | `5017d2331b77101eb7cf8630903c9a5fef45bafb3dceffac2e56b5b30864d5fe` |
+| PREPARE height / block hash / fee | 4,338,159 / `007cd636b357736d174a5081c8011e0897f3bdcd8484dad107c5b13e5e67592b` / 15,000 zat |
+| **DEPLOY wasm size / code hash** | 2513 B / `fa8289fbc0fdb132e57f939033a9971b0ee2990ec49db247aad3f682aa804cc7` |
+| **DEPLOY txid** | `d6e8552c3622106382f71c8285e35565fd4451fe3bf5c2ca87d7fd60626e2e26` |
+| DEPLOY height / block hash / fee | 4,338,160 / `006ad6137b69aa784b5f0d8bddc6dff49e827ca5c7b72752b34ce7b555a451f7` / 95,000 zat |
+| **Contract id** | `607a6246c512239a23f51cf8053444d4d76e7684c1a53dc26a626b474a8cf3c0` |
+| reconstructed SHA256 == code hash | **yes** |
+| CLI ContractId == indexed ContractId | **yes** |
+| **CALL #1 txid** | `7a8bbf7df470c9a41a47314e00c55605e910b80c703346ee233aa49e966ea094` |
+| CALL #1 height / success / fuel / root | 4,338,164 / true / 3936 / `fce484adb8a759bddebe137278fb2b704d34b49eda73a210d38987b6d040a0f9` |
+| **CALL #2 txid** | `933eb98929c28678a57c54c73fba36b279ae2ad9098aa6fc6edb23fbc5450f0d` |
+| CALL #2 height / success / fuel / root | 4,338,166 / true / 3936 / `8d699bab97b280d7008c59f27c1250f05de42503a0354282b850616e0344c625` |
+| **view get()** | **2** |
+| root at activation (empty) | `b120099c167da673588b15aa827c3bbd9339a9a2d934b0d20c99cebe69f8ffe6` |
+| root after deploy | `b5b20286d961283bfbbecc758f4bac1b9f06da0373b107094e84aa32a057aa30` |
+| root after call #1 | `fce484adb8a759bddebe137278fb2b704d34b49eda73a210d38987b6d040a0f9` |
+| root after call #2 | `8d699bab97b280d7008c59f27c1250f05de42503a0354282b850616e0344c625` |
+| **Persistence** (restart) | root unchanged `8d699bab…`, `get() == 2`, code hash identical |
+| **Fresh reindex** | final root `8d699bab…` identical, ContractId identical, `get() == 2` |
+| **Public RPC** | `https://zalkanes-testnet-production.up.railway.app` — network `test`, syncing `false` |
+
+Distinctness checks: `root_after_deploy != root_at_activation`,
+`root_after_call_1 != root_after_deploy`, `root_after_call_2 != root_after_call_1`
+— all hold.
