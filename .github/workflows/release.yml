@@ -1,0 +1,142 @@
+name: release-engineering
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # ── Priority 5: reproducible builds + SBOM + checksums ────────────────────
+  reproducible:
+    name: reproducible build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            runner: ubuntu-24.04
+          - target: aarch64-unknown-linux-gnu
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      # Reproducibility inputs: a fixed timestamp and paths remapped off the
+      # build directory, so two clean builds differ only if the toolchain is
+      # genuinely nondeterministic.
+      SOURCE_DATE_EPOCH: "1700000000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: record toolchain + pins
+        run: |
+          rustc -vV
+          cargo -V
+          echo "protocol manifest sha256:"
+          sha256sum protocol/v0.toml
+
+      # Two INDEPENDENT clean builds from the same commit, in different
+      # directories, each with its own target dir and no shared cache.
+      - name: clean build A
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/buildA && cp -a . /tmp/buildA/src
+          cd /tmp/buildA/src
+          RUSTFLAGS="--remap-path-prefix=/tmp/buildA/src=/zalkanes --remap-path-prefix=$HOME/.cargo=/cargo" \
+            cargo build --release --locked -p zalkanes-cli --target ${{ matrix.target }}
+          sha256sum target/${{ matrix.target }}/release/zalkanes | tee /tmp/hashA.txt
+
+      - name: clean build B
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/buildB && cp -a . /tmp/buildB/src
+          cd /tmp/buildB/src
+          RUSTFLAGS="--remap-path-prefix=/tmp/buildB/src=/zalkanes --remap-path-prefix=$HOME/.cargo=/cargo" \
+            cargo build --release --locked -p zalkanes-cli --target ${{ matrix.target }}
+          sha256sum target/${{ matrix.target }}/release/zalkanes | tee /tmp/hashB.txt
+
+      - name: compare artifacts (reproducibility gate)
+        run: |
+          set -euo pipefail
+          A=$(cut -d' ' -f1 /tmp/hashA.txt)
+          B=$(cut -d' ' -f1 /tmp/hashB.txt)
+          echo "build A: $A"
+          echo "build B: $B"
+          if [ "$A" != "$B" ]; then
+            echo "::error::builds are NOT byte-identical for ${{ matrix.target }}"
+            # Surface where they diverge so the cause can be fixed or recorded
+            # precisely — never hand-waved.
+            cmp -l /tmp/buildA/src/target/${{ matrix.target }}/release/zalkanes \
+                   /tmp/buildB/src/target/${{ matrix.target }}/release/zalkanes | head -40 || true
+            exit 1
+          fi
+          echo "reproducible: byte-identical across two clean builds"
+
+      - name: SBOM (CycloneDX)
+        run: |
+          set -euo pipefail
+          cargo install cargo-cyclonedx --locked --version 0.5.7
+          cargo cyclonedx --format json --all
+          ls -la *.cdx.json crates/*/*.cdx.json 2>/dev/null || true
+
+      - name: artifact manifest + checksums
+        run: |
+          set -euo pipefail
+          BIN=/tmp/buildA/src/target/${{ matrix.target }}/release/zalkanes
+          mkdir -p dist
+          cp "$BIN" dist/zalkanes-${{ matrix.target }}
+          find . -name '*.cdx.json' -maxdepth 3 -exec cp {} dist/ \; 2>/dev/null || true
+          cd dist
+          sha256sum zalkanes-${{ matrix.target }} > SHA256SUMS
+          cat > MANIFEST.txt <<EOF
+          artifact:            zalkanes-${{ matrix.target }}
+          source commit:       ${{ github.sha }}
+          source ref:          ${{ github.ref }}
+          target triple:       ${{ matrix.target }}
+          rustc:               $(rustc -V)
+          cargo:               $(cargo -V)
+          SOURCE_DATE_EPOCH:   ${SOURCE_DATE_EPOCH}
+          protocol manifest:   $(sha256sum ../protocol/v0.toml | cut -d' ' -f1)
+          reproducible:        yes (two independent clean builds byte-identical)
+          sha256:              $(cut -d' ' -f1 SHA256SUMS)
+          EOF
+          cat MANIFEST.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: zalkanes-${{ matrix.target }}
+          path: dist/
+
+  # ── Priority 8: REAL disk-full on a capacity-limited filesystem ───────────
+  disk-full:
+    name: real disk-full (ext4 loopback)
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: mount a small ext4 loopback filesystem
+        run: |
+          set -euo pipefail
+          # 48 MiB image: genuinely capacity-limited, not a mocked error.
+          dd if=/dev/zero of=/tmp/small.img bs=1M count=48
+          mkfs.ext4 -q /tmp/small.img
+          sudo mkdir -p /mnt/smallfs
+          sudo mount -o loop /tmp/small.img /mnt/smallfs
+          sudo chown -R "$(id -u):$(id -g)" /mnt/smallfs
+          df -h /mnt/smallfs
+      - name: run the disk-full test against it
+        env:
+          ZALKANES_SMALL_FS: /mnt/smallfs
+        run: cargo test -p zalkanes-state --test disk_full -- --nocapture
+      - name: unmount
+        if: always()
+        run: sudo umount /mnt/smallfs || true
