@@ -3704,6 +3704,7 @@ dependencies = [
  "thiserror 1.0.64",
  "tracing",
  "wasmi",
+ "wasmparser 0.228.0",
  "wat",
  "zalkanes-core",
  "zalkanes-state",

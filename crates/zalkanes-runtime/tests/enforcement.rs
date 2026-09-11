@@ -93,6 +93,33 @@ fn table_elements_limit_enforced() {
 }
 
 #[test]
+fn function_count_limit_enforced() {
+    use zalkanes_core::consensus::MAX_FUNCTIONS;
+    // MAX_FUNCTIONS + 1 defined functions (plus the dispatch func).
+    let mut funcs = String::new();
+    for _ in 0..=MAX_FUNCTIONS {
+        funcs.push_str("(func)");
+    }
+    let wat = format!(
+        "(module (memory (export \"memory\") 1) {funcs} (func (export \"dispatch\") (param i32 i32) (result i32) i32.const 0))"
+    );
+    assert!(validate_module(&wat_module(&wat)).is_err());
+}
+
+#[test]
+fn global_count_limit_enforced() {
+    use zalkanes_core::consensus::MAX_GLOBALS;
+    let mut globals = String::new();
+    for _ in 0..=MAX_GLOBALS {
+        globals.push_str("(global i32 (i32.const 0))");
+    }
+    let wat = format!(
+        "(module (memory (export \"memory\") 1) {globals} (func (export \"dispatch\") (param i32 i32) (result i32) i32.const 0))"
+    );
+    assert!(validate_module(&wat_module(&wat)).is_err());
+}
+
+#[test]
 fn malformed_wasm_rejected_without_panic() {
     // Deterministic rejection, no panic.
     assert!(validate_module(b"\x00asm\x01\x00\x00\x00\xff\xff\xff").is_err());

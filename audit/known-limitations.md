@@ -7,8 +7,7 @@ should confirm whether any of these change the security conclusion.
 
 | Constant | Status |
 |----------|--------|
-| `MAX_FUNCTIONS`, `MAX_GLOBALS` | **Not enforced.** wasmi 2.0.0's public `Module` API exposes import/export iterators but not the total internal function/global counts. The parser enforces `MAX_IMPORTS`/`MAX_EXPORTS`; total internal counts are bounded indirectly by module size (`MAX_CODE_BYTES`). |
-| `MAX_TABLE_ELEMENTS` | Enforced for **imported/exported** tables. Internal (non-exported) tables are not inspected via wasmi's public API. |
+| `MAX_FUNCTIONS`, `MAX_GLOBALS`, `MAX_TABLE_ELEMENTS`, `MAX_LINEAR_MEMORY_PAGES`, `MAX_IMPORTS`, `MAX_EXPORTS` | **Enforced** via `wasmparser` section counting in `validate_module`. |
 | `MAX_FUEL_PER_ZCASH_TX` | **Not aggregated.** `MAX_FUEL_PER_CALL` is enforced per call; per-transaction fuel is not yet summed. |
 | `MAX_FUEL_PER_ZCASH_BLOCK` | **Not aggregated.** Same as above at block scope. |
 | `MAX_STORAGE_WRITES_PER_CALL` | Enforced (distinct overlay keys). |

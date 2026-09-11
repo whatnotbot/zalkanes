@@ -64,6 +64,10 @@ pub struct CallContext {
 }
 
 /// Validate a WASM module against the v0 feature set and structural limits.
+///
+/// Structural limits are counted with `wasmparser` (a full section-level parser)
+/// so that *total* function/global/table/memory counts are enforced, not just
+/// imported/exported ones.
 pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
     if wasm.len() as u32 > MAX_CODE_BYTES {
         return Err(format!(
@@ -73,57 +77,113 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
         ));
     }
     let engine = Engine::default();
-    let module = Module::new(&engine, wasm).map_err(|e| format!("WASM parse error: {e}"))?;
+    Module::new(&engine, wasm).map_err(|e| format!("WASM parse error: {e}"))?;
 
-    // Structural limits. Wasmi 2.0.0 exposes import/export counts and the
-    // imported/exported memory + table types; the Zalkanes host ABI requires the
-    // contract to export `memory`, so the memory limit is covered by the exports.
-    let import_count = module.imports().len();
-    if import_count > MAX_IMPORTS as usize {
+    let counts = count_module_entities(wasm)?;
+
+    if counts.funcs > MAX_FUNCTIONS as usize {
         return Err(format!(
-            "import count {import_count} exceeds MAX_IMPORTS {MAX_IMPORTS}"
+            "function count {} exceeds MAX_FUNCTIONS {MAX_FUNCTIONS}",
+            counts.funcs
         ));
     }
-    let export_count = module.exports().count();
-    if export_count > MAX_EXPORTS as usize {
+    if counts.globals > MAX_GLOBALS as usize {
         return Err(format!(
-            "export count {export_count} exceeds MAX_EXPORTS {MAX_EXPORTS}"
+            "global count {} exceeds MAX_GLOBALS {MAX_GLOBALS}",
+            counts.globals
         ));
     }
-    for import in module.imports() {
-        enforce_memory_table_limits(&import.ty().clone())?;
+    if counts.imports > MAX_IMPORTS as usize {
+        return Err(format!(
+            "import count {} exceeds MAX_IMPORTS {MAX_IMPORTS}",
+            counts.imports
+        ));
     }
-    for export in module.exports() {
-        enforce_memory_table_limits(&export.ty().clone())?;
+    if counts.exports > MAX_EXPORTS as usize {
+        return Err(format!(
+            "export count {} exceeds MAX_EXPORTS {MAX_EXPORTS}",
+            counts.exports
+        ));
+    }
+    if counts.max_memory_pages > MAX_LINEAR_MEMORY_PAGES as u64 {
+        return Err(format!(
+            "memory {} pages exceeds MAX_LINEAR_MEMORY_PAGES {MAX_LINEAR_MEMORY_PAGES}",
+            counts.max_memory_pages
+        ));
+    }
+    if counts.max_table_elems > MAX_TABLE_ELEMENTS as u64 {
+        return Err(format!(
+            "table {} elements exceeds MAX_TABLE_ELEMENTS {MAX_TABLE_ELEMENTS}",
+            counts.max_table_elems
+        ));
     }
     Ok(())
 }
 
-fn enforce_memory_table_limits(ty: &wasmi::ExternType) -> Result<(), String> {
-    match ty {
-        wasmi::ExternType::Memory(mt) => {
-            if mt.minimum() > MAX_LINEAR_MEMORY_PAGES as u64
-                || mt
-                    .maximum()
-                    .is_some_and(|m| m > MAX_LINEAR_MEMORY_PAGES as u64)
-            {
-                return Err(format!(
-                    "memory exceeds MAX_LINEAR_MEMORY_PAGES {MAX_LINEAR_MEMORY_PAGES}"
-                ));
+struct ModuleCounts {
+    funcs: usize,
+    globals: usize,
+    imports: usize,
+    exports: usize,
+    max_memory_pages: u64,
+    max_table_elems: u64,
+}
+
+fn count_module_entities(wasm: &[u8]) -> Result<ModuleCounts, String> {
+    let mut funcs = 0usize;
+    let mut globals = 0usize;
+    let mut imports = 0usize;
+    let mut exports = 0usize;
+    let mut max_memory_pages = 0u64;
+    let mut max_table_elems = 0u64;
+
+    let parser = wasmparser::Parser::new(0);
+    for payload in parser.parse_all(wasm) {
+        match payload.map_err(|e| format!("wasm parse error: {e}"))? {
+            wasmparser::Payload::ImportSection(s) => {
+                imports = s.count() as usize;
+                for import in s {
+                    let import = import.map_err(|e| format!("wasm import error: {e}"))?;
+                    match import.ty {
+                        wasmparser::TypeRef::Func(_) => funcs += 1,
+                        wasmparser::TypeRef::Table(t) => {
+                            max_table_elems = max_table_elems.max(t.initial);
+                        }
+                        wasmparser::TypeRef::Memory(m) => {
+                            max_memory_pages = max_memory_pages.max(m.initial);
+                        }
+                        wasmparser::TypeRef::Global(_) => globals += 1,
+                        wasmparser::TypeRef::Tag(_) => {}
+                    }
+                }
             }
-        }
-        wasmi::ExternType::Table(tt) => {
-            if tt.minimum() > MAX_TABLE_ELEMENTS as u64
-                || tt.maximum().is_some_and(|m| m > MAX_TABLE_ELEMENTS as u64)
-            {
-                return Err(format!(
-                    "table exceeds MAX_TABLE_ELEMENTS {MAX_TABLE_ELEMENTS}"
-                ));
+            wasmparser::Payload::FunctionSection(s) => funcs += s.count() as usize,
+            wasmparser::Payload::TableSection(s) => {
+                for table in s {
+                    let table = table.map_err(|e| format!("wasm table error: {e}"))?;
+                    max_table_elems = max_table_elems.max(table.ty.initial);
+                }
             }
+            wasmparser::Payload::MemorySection(s) => {
+                for memory in s {
+                    let memory = memory.map_err(|e| format!("wasm memory error: {e}"))?;
+                    max_memory_pages = max_memory_pages.max(memory.initial);
+                }
+            }
+            wasmparser::Payload::GlobalSection(s) => globals += s.count() as usize,
+            wasmparser::Payload::ExportSection(s) => exports = s.count() as usize,
+            _ => {}
         }
-        _ => {}
     }
-    Ok(())
+
+    Ok(ModuleCounts {
+        funcs,
+        globals,
+        imports,
+        exports,
+        max_memory_pages,
+        max_table_elems,
+    })
 }
 
 struct HostState<'a> {

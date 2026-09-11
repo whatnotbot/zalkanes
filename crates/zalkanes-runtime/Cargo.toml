@@ -8,6 +8,7 @@ license.workspace = true
 zalkanes-core = { workspace = true }
 zalkanes-state = { workspace = true }
 wasmi = { workspace = true }
+wasmparser = { version = "=0.228.0", default-features = false }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }
