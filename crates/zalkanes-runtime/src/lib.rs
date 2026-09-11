@@ -68,6 +68,42 @@ pub struct CallContext {
 /// Structural limits are counted with `wasmparser` (a full section-level parser)
 /// so that *total* function/global/table/memory counts are enforced, not just
 /// imported/exported ones.
+/// The single consensus engine configuration. Validation and execution use
+/// EXACTLY this configuration, so a module accepted at deploy parses under
+/// identical rules at every later call.
+///
+/// Feature gates mirror the frozen `protocol/v0.toml` `[wasm]` section:
+/// `floating_point = false`, `simd = false`, `memory64 = false` (threads have
+/// no wasmi representation), plus `allow_start_fn(false)` — a start function
+/// would execute code outside the metered `dispatch` entry point.
+fn consensus_config() -> Config {
+    let mut config = Config::default();
+    // NOTE: SIMD (and relaxed SIMD) are not compiled into this wasmi build at
+    // all (the `simd` cargo feature is off), so SIMD modules are structurally
+    // rejected — stronger than a runtime toggle.
+    config
+        .floats(false)
+        .wasm_memory64(false)
+        .wasm_custom_page_sizes(false)
+        .wasm_wide_arithmetic(false)
+        .allow_start_fn(false)
+        .consume_fuel(true)
+        .compilation_mode(CompilationMode::Eager);
+    config
+}
+
+/// The host functions the consensus linker provides (module "env"). Imports
+/// outside this set are rejected at validation time so an undeployable
+/// contract can never enter consensus state.
+const HOST_IMPORTS: [&str; 6] = [
+    "storage_get",
+    "storage_set",
+    "storage_delete",
+    "output_write",
+    "context_block_height",
+    "input_read",
+];
+
 pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
     if wasm.len() as u32 > MAX_CODE_BYTES {
         return Err(format!(
@@ -76,7 +112,7 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
             MAX_CODE_BYTES
         ));
     }
-    let engine = Engine::default();
+    let engine = Engine::new(&consensus_config());
     Module::new(&engine, wasm).map_err(|e| format!("WASM parse error: {e}"))?;
 
     let counts = count_module_entities(wasm)?;
@@ -116,6 +152,30 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
             "table {} elements exceeds MAX_TABLE_ELEMENTS {MAX_TABLE_ELEMENTS}",
             counts.max_table_elems
         ));
+    }
+
+    // Every import must resolve against the known host ABI, at validation
+    // time — not as a delayed instantiation trap after the deploy landed.
+    let parser = wasmparser::Parser::new(0);
+    for payload in parser.parse_all(wasm) {
+        if let wasmparser::Payload::ImportSection(sec) =
+            payload.map_err(|e| format!("wasm parse error: {e}"))?
+        {
+            for import in sec {
+                let import = import.map_err(|e| format!("wasm import error: {e}"))?;
+                let known = import.module == "env"
+                    && HOST_IMPORTS.contains(&import.name)
+                    && matches!(import.ty, wasmparser::TypeRef::Func(_));
+                if !known {
+                    return Err(format!(
+                        "unresolvable import {}::{} (host ABI provides only env::{{{}}})",
+                        import.module,
+                        import.name,
+                        HOST_IMPORTS.join(", ")
+                    ));
+                }
+            }
+        }
     }
     Ok(())
 }
@@ -194,6 +254,9 @@ struct HostState<'a> {
     /// Write buffer: reads consult this first, then the base store.
     overlay: std::collections::BTreeMap<Vec<u8>, Option<Vec<u8>>>,
     base: &'a dyn StateStore,
+    /// Runtime resource caps (memory growth, tables): `memory.grow` beyond
+    /// the consensus cap fails deterministically in-wasm (returns -1).
+    limits: wasmi::StoreLimits,
 }
 
 /// Execute a contract call against a state store, buffering writes.
@@ -216,11 +279,9 @@ pub fn execute(ctx: CallContext, state: &dyn StateStore) -> CallResult {
         None => return CallResult::ContractNotFound,
     };
 
-    // Build engine with fuel metering (consensus-critical config)
-    let mut config = Config::default();
-    config.consume_fuel(true);
-    config.compilation_mode(CompilationMode::Eager);
-    let engine = Engine::new(&config);
+    // Build the engine with the SAME consensus configuration used at
+    // validation time (feature gates + fuel metering).
+    let engine = Engine::new(&consensus_config());
 
     let module = match Module::new(&engine, &wasm) {
         Ok(m) => m,
@@ -238,9 +299,16 @@ pub fn execute(ctx: CallContext, state: &dyn StateStore) -> CallResult {
         block_height: ctx.block_height,
         overlay: Default::default(),
         base: state,
+        limits: wasmi::StoreLimitsBuilder::new()
+            .memory_size(MAX_LINEAR_MEMORY_PAGES as usize * 65536)
+            .table_elements(MAX_TABLE_ELEMENTS as usize)
+            .memories(1)
+            .tables(1)
+            .build(),
     };
 
     let mut store = Store::new(&engine, host);
+    store.limiter(|host| &mut host.limits);
     if let Err(e) = store.set_fuel(ctx.fuel_limit) {
         return CallResult::Trap {
             reason: format!("set_fuel failed: {e}"),
@@ -355,10 +423,13 @@ fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
                         let vlen = v.len();
                         let data = mem.data_mut(&mut caller);
                         let dst = val_ptr as usize;
-                        if dst + vlen > data.len() {
+                        let Some(end) = dst.checked_add(vlen) else {
+                            return -1;
+                        };
+                        if end > data.len() {
                             return -1;
                         }
-                        data[dst..dst + vlen].copy_from_slice(&v);
+                        data[dst..end].copy_from_slice(&v);
                         vlen as i32
                     }
                 }
@@ -422,6 +493,9 @@ fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
                     Some(m) => m,
                     None => return -1,
                 };
+                if key_len as u32 > MAX_STORAGE_KEY_BYTES {
+                    return -1;
+                }
                 let key = {
                     let data = mem.data(&caller);
                     let s = key_ptr as usize;
@@ -486,10 +560,13 @@ fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
                 };
                 let data = mem.data_mut(&mut caller);
                 let s = out_ptr as usize;
-                if s + 4 > data.len() {
+                let Some(e) = s.checked_add(4) else {
+                    return -1;
+                };
+                if e > data.len() {
                     return -1;
                 }
-                data[s..s + 4].copy_from_slice(&height.to_be_bytes());
+                data[s..e].copy_from_slice(&height.to_be_bytes());
                 0
             },
         )
@@ -518,10 +595,13 @@ fn build_linker<'a>(engine: &Engine) -> Linker<HostState<'a>> {
                 };
                 let data = mem.data_mut(&mut caller);
                 let s = out_ptr as usize;
-                if s + slen > data.len() {
+                let Some(e) = s.checked_add(slen) else {
+                    return -1;
+                };
+                if e > data.len() {
                     return -1;
                 }
-                data[s..s + slen].copy_from_slice(slice);
+                data[s..e].copy_from_slice(slice);
                 slen as i32
             },
         )

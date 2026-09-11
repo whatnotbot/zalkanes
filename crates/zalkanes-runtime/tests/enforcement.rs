@@ -38,20 +38,16 @@ fn memory_pages_limit_enforced() {
 
 #[test]
 fn import_count_limit_enforced() {
-    // A module with MAX_IMPORTS imports of the `env.unknown` function.
-    let imports = (0..MAX_IMPORTS)
-        .map(|i| format!("(import \"env\" \"f{i}\" (func))"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    // Imports must now also RESOLVE against the host ABI, so the count test
+    // repeats a known host function (repeated imports are legal WASM).
+    let import = "(import \"env\" \"storage_delete\" (func (param i32 i32) (result i32)))";
+    let imports = vec![import; MAX_IMPORTS as usize].join("\n");
     let at_limit = format!(
         "(module {imports} (memory (export \"memory\") 1) (func (export \"dispatch\") (param i32 i32) (result i32) i32.const 0))"
     );
     assert!(validate_module(&wat_module(&at_limit)).is_ok());
 
-    let imports_over = (0..=MAX_IMPORTS)
-        .map(|i| format!("(import \"env\" \"f{i}\" (func))"))
-        .collect::<Vec<_>>()
-        .join("\n");
+    let imports_over = vec![import; MAX_IMPORTS as usize + 1].join("\n");
     let over = format!(
         "(module {imports_over} (memory (export \"memory\") 1) (func (export \"dispatch\") (param i32 i32) (result i32) i32.const 0))"
     );
