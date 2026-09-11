@@ -10,8 +10,8 @@ use std::io::Write;
 use anyhow::{anyhow, Result};
 use rand_core::{OsRng, RngCore};
 use secrecy::{ExposeSecret, SecretVec};
+use zalkanes_core::consensus_params::ConsensusParams;
 use zalkanes_wallet::{SqliteShieldedWallet, ZebraCanonicalChainSource};
-use zcash_protocol::consensus::Network;
 
 fn main() -> Result<()> {
     let rpc_url = std::env::var("ZALKANES_TESTNET_RPC_URL")
@@ -59,9 +59,9 @@ fn main() -> Result<()> {
         seed
     };
 
-    let chain_source = ZebraCanonicalChainSource::new(rpc_url, Network::TestNetwork)?;
+    let chain_source = ZebraCanonicalChainSource::new(rpc_url, ConsensusParams::Test)?;
     let wallet =
-        SqliteShieldedWallet::create_new(&db_path, Network::TestNetwork, seed, &chain_source)?;
+        SqliteShieldedWallet::create_new(&db_path, ConsensusParams::Test, seed, &chain_source)?;
 
     println!("testnet unified address: {}", wallet.unified_address()?);
     println!("wallet birthday height:  {}", wallet.birthday_height()?);

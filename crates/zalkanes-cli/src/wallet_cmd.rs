@@ -25,6 +25,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{bail, Context, Result};
+use zalkanes_core::consensus_params::ConsensusParams;
 use zalkanes_core::types::Network;
 use zalkanes_wallet::{
     broadcast::{broadcast_verified, BroadcastOutcome, ZebraBroadcastClient},
@@ -34,7 +35,6 @@ use zalkanes_wallet::{
     FundContext, FundingPlan, FundingSource, FundingUtxo, Journal, ShieldedFunding, ShieldedWallet,
     SqliteShieldedWallet, TransparentFunding, TxRequest, ZebraCanonicalChainSource,
 };
-use zcash_protocol::consensus::Network as ZcashNetwork;
 
 // ── Funding mode ─────────────────────────────────────────────────────────────
 
@@ -94,11 +94,15 @@ fn keystore_network(network: Network) -> KeystoreNetwork {
     }
 }
 
-fn zcash_network(network: Network) -> ZcashNetwork {
-    match network {
-        Network::Mainnet => ZcashNetwork::MainNetwork,
-        _ => ZcashNetwork::TestNetwork,
-    }
+/// Consensus parameters for the wallet stack.
+///
+/// MUST NOT collapse regtest onto testnet: regtest activates every network
+/// upgrade at height 1, so testnet parameters resolve the wrong consensus
+/// branch id and block parsing fails ("coinbase tx's claimed height doesn't
+/// match its consensus branch ID"). `ConsensusParams` models all three
+/// networks correctly.
+fn wallet_params(network: Network) -> ConsensusParams {
+    ConsensusParams::for_network(network)
 }
 
 /// Read the keystore passphrase: `$ZALKANES_PASSPHRASE` for automation, else
@@ -176,11 +180,11 @@ pub fn wallet_create(network: Network, zebra_url: &str) -> Result<()> {
         bail!("passphrases do not match");
     }
 
-    let chain = ZebraCanonicalChainSource::new(zebra_url.to_string(), zcash_network(network))?;
+    let chain = ZebraCanonicalChainSource::new(zebra_url.to_string(), wallet_params(network))?;
     let seed = generate_seed();
     ks.create(&pass, &seed, keystore_network(network), 0)?;
     let wallet =
-        SqliteShieldedWallet::create_new(&db_path(&dir), zcash_network(network), seed, &chain)?;
+        SqliteShieldedWallet::create_new(&db_path(&dir), wallet_params(network), seed, &chain)?;
 
     println!("wallet created");
     println!("  directory:       {}", dir.display());
@@ -206,10 +210,10 @@ pub fn wallet_restore(network: Network, zebra_url: &str, birthday: u32) -> Resul
     }
     let pass = read_passphrase("Wallet passphrase: ")?;
     let seed = ks.unlock(&pass, keystore_network(network))?;
-    let chain = ZebraCanonicalChainSource::new(zebra_url.to_string(), zcash_network(network))?;
+    let chain = ZebraCanonicalChainSource::new(zebra_url.to_string(), wallet_params(network))?;
     let wallet = SqliteShieldedWallet::restore(
         &db_path(&dir),
-        zcash_network(network),
+        wallet_params(network),
         seed.clone_secret(),
         birthday,
         &chain,
@@ -229,7 +233,7 @@ fn open_locked(network: Network) -> Result<(std::path::PathBuf, SqliteShieldedWa
             db.display()
         );
     }
-    let wallet = SqliteShieldedWallet::open_locked(&db, zcash_network(network))?;
+    let wallet = SqliteShieldedWallet::open_locked(&db, wallet_params(network))?;
     Ok((dir, wallet))
 }
 
@@ -266,7 +270,7 @@ pub fn wallet_status(network: Network, zebra_url: &str) -> Result<()> {
     println!("balance:     {} zat", wallet.balance()?);
     println!("notes:       {}", wallet.shielded_note_summary()?);
 
-    match ZebraCanonicalChainSource::new(zebra_url.to_string(), zcash_network(network))
+    match ZebraCanonicalChainSource::new(zebra_url.to_string(), wallet_params(network))
         .and_then(|c| c.canonical_tip())
     {
         Ok(tip) => {
@@ -285,7 +289,7 @@ pub fn wallet_status(network: Network, zebra_url: &str) -> Result<()> {
 
 pub fn wallet_scan(network: Network, zebra_url: &str) -> Result<()> {
     let (_, wallet) = open_locked(network)?;
-    let chain = ZebraCanonicalChainSource::new(zebra_url.to_string(), zcash_network(network))?;
+    let chain = ZebraCanonicalChainSource::new(zebra_url.to_string(), wallet_params(network))?;
     // Scanning is watch-capable: it needs no spend authorization.
     wallet.scan_to_tip(&chain)?;
     let tip = chain.canonical_tip()?;
@@ -391,12 +395,12 @@ fn build_source(
         let seed =
             Keystore::at(keystore_path(&dir)).unlock(&pass, keystore_network(opts.network))?;
         let wallet =
-            SqliteShieldedWallet::open_locked(&db_path(&dir), zcash_network(opts.network))?;
+            SqliteShieldedWallet::open_locked(&db_path(&dir), wallet_params(opts.network))?;
         wallet.unlock_with_seed(&seed.clone_secret())?;
 
         // Sync + pin the canonical tip before planning.
         let chain =
-            ZebraCanonicalChainSource::new(opts.zebra_url.clone(), zcash_network(opts.network))?;
+            ZebraCanonicalChainSource::new(opts.zebra_url.clone(), wallet_params(opts.network))?;
         wallet.scan_to_tip(&chain)?;
         wallet.set_canonical_tip(chain.canonical_tip()?);
         let carrier = crate::signing_key().ok();
@@ -417,7 +421,7 @@ fn build_source(
         FundingMode::Auto => {
             if shielded_available {
                 let balance =
-                    SqliteShieldedWallet::open_locked(&db_path(&dir), zcash_network(opts.network))
+                    SqliteShieldedWallet::open_locked(&db_path(&dir), wallet_params(opts.network))
                         .and_then(|w| w.balance())
                         .unwrap_or(0);
                 if balance >= required_zat && session_is_armed(&dir) {
@@ -449,7 +453,7 @@ pub fn execute_request(
     mainnet_guard(opts)?;
 
     let chain =
-        ZebraCanonicalChainSource::new(opts.zebra_url.clone(), zcash_network(opts.network))?;
+        ZebraCanonicalChainSource::new(opts.zebra_url.clone(), wallet_params(opts.network))?;
     let (source, used) = build_source(opts, required_zat, transparent_utxos)?;
     let tip = chain.canonical_tip()?;
     let ctx = FundContext::new(opts.network, tip);

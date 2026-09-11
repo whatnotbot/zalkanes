@@ -11,6 +11,7 @@
 #![forbid(unsafe_code)]
 
 use std::rc::Rc;
+use zalkanes_core::consensus_params::ConsensusParams;
 
 use anyhow::{anyhow, bail, Result};
 use secrecy::SecretVec;
@@ -18,7 +19,6 @@ use zalkanes_wallet::{
     funding::TipSource, FundContext, FundingSource, ShieldedFunding, ShieldedWallet,
     SqliteShieldedWallet, TxRequest, ZebraCanonicalChainSource,
 };
-use zcash_protocol::consensus::Network as ZcashNetwork;
 
 /// Trait-object adapter so the driver keeps a release/rescan handle to the
 /// same wallet that the funding source owns.
@@ -106,11 +106,10 @@ fn main() -> Result<()> {
     // ── Open wallet + chain source ──────────────────────────────────────────
     let seed_hex = std::fs::read_to_string(wallet_dir.join("seed"))?;
     let seed = SecretVec::new(hex::decode(seed_hex.trim())?);
-    let chain_source =
-        ZebraCanonicalChainSource::new(zebra_url.clone(), ZcashNetwork::TestNetwork)?;
+    let chain_source = ZebraCanonicalChainSource::new(zebra_url.clone(), ConsensusParams::Test)?;
     let wallet = Rc::new(SqliteShieldedWallet::reopen(
         &wallet_dir.join("wallet.sqlite"),
-        ZcashNetwork::TestNetwork,
+        ConsensusParams::Test,
         seed,
     )?);
     let funding = ShieldedFunding::new(Box::new(SharedWallet(Rc::clone(&wallet))), None);

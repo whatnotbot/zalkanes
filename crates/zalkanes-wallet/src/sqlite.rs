@@ -19,6 +19,7 @@ use orchard::{
 use rand_core::OsRng;
 use secrecy::{ExposeSecret, SecretVec};
 use sha2::{Digest, Sha256};
+use zalkanes_core::consensus_params::ConsensusParams;
 use zcash_client_backend::{
     data_api::{
         chain::ChainState,
@@ -38,16 +39,13 @@ use zcash_keys::{
     address::UnifiedAddress,
     keys::{UnifiedAddressRequest, UnifiedSpendingKey},
 };
-use zcash_protocol::{
-    consensus::{BlockHeight, Network},
-    ShieldedPool,
-};
+use zcash_protocol::{consensus::BlockHeight, ShieldedPool};
 use zip32::AccountId;
 
 use super::{ShieldedSelection, ShieldedSpend, ShieldedWallet, SyncStatus};
 
 /// The concrete wallet database type used here.
-type Db = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
+type Db = WalletDb<rusqlite::Connection, ConsensusParams, SystemClock, OsRng>;
 
 /// A shielded wallet backed by `zcash_client_sqlite`.
 /// Spend authorization material, present only while the wallet is UNLOCKED.
@@ -72,7 +70,7 @@ impl SqliteShieldedWallet {
     /// spending keys from `seed` (held in memory only), and initializes schema.
     fn open_db_and_derive(
         path: &std::path::Path,
-        network: Network,
+        network: ConsensusParams,
         seed: &SecretVec<u8>,
     ) -> Result<(Db, FullViewingKey, SpendAuthorizingKey)> {
         let mut db = WalletDb::for_path(path, network, SystemClock, OsRng)
@@ -99,7 +97,7 @@ impl SqliteShieldedWallet {
     /// Open the wallet WATCH-ONLY (locked): no seed, no spend authorization.
     /// Scanning, address, balance, and status all work from the viewing key
     /// already stored in the wallet database.
-    pub fn open_locked(path: &std::path::Path, network: Network) -> Result<Self> {
+    pub fn open_locked(path: &std::path::Path, network: ConsensusParams) -> Result<Self> {
         let mut db = WalletDb::for_path(path, network, SystemClock, OsRng)
             .map_err(|e| anyhow!("open wallet db: {e}"))?;
         zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None)
@@ -159,7 +157,7 @@ impl SqliteShieldedWallet {
     /// reorg buffer).
     pub fn create_new(
         path: &std::path::Path,
-        network: Network,
+        network: ConsensusParams,
         seed: SecretVec<u8>,
         chain_source: &dyn crate::chain_source::CanonicalChainSource,
     ) -> Result<Self> {
@@ -191,7 +189,11 @@ impl SqliteShieldedWallet {
     /// Reopen an EXISTING wallet. Fails if it does not exist. Preserves the
     /// stored birthday, scanned progress, account identity, and reservations;
     /// does NOT recompute the birthday from the current Zebra tip.
-    pub fn reopen(path: &std::path::Path, network: Network, seed: SecretVec<u8>) -> Result<Self> {
+    pub fn reopen(
+        path: &std::path::Path,
+        network: ConsensusParams,
+        seed: SecretVec<u8>,
+    ) -> Result<Self> {
         let (db, fvk, ask) = Self::open_db_and_derive(path, network, &seed)?;
         let ids = db
             .get_account_ids()
@@ -216,7 +218,7 @@ impl SqliteShieldedWallet {
     /// before it is fetched from Zebra.
     pub fn restore(
         path: &std::path::Path,
-        network: Network,
+        network: ConsensusParams,
         seed: SecretVec<u8>,
         birthday_height: u32,
         chain_source: &dyn crate::chain_source::CanonicalChainSource,
@@ -788,7 +790,7 @@ mod tests {
 
         let wallet = SqliteShieldedWallet::create_new(
             &path,
-            Network::TestNetwork,
+            ConsensusParams::Test,
             random_seed(),
             &MockChainSource { tip: 200 },
         )
@@ -824,7 +826,7 @@ mod tests {
         // Tip 10_000 -> birthday prior state 9_900 -> first scan block 9_901.
         let wallet = SqliteShieldedWallet::create_new(
             &path,
-            Network::TestNetwork,
+            ConsensusParams::Test,
             random_seed(),
             &MockChainSource { tip: 10_000 },
         )
@@ -849,10 +851,10 @@ mod tests {
     fn create_new_twice_fails() {
         let path = tmp_path("create-twice");
         let mock = MockChainSource { tip: 200 };
-        SqliteShieldedWallet::create_new(&path, Network::TestNetwork, random_seed(), &mock)
+        SqliteShieldedWallet::create_new(&path, ConsensusParams::Test, random_seed(), &mock)
             .unwrap();
         let err =
-            SqliteShieldedWallet::create_new(&path, Network::TestNetwork, random_seed(), &mock);
+            SqliteShieldedWallet::create_new(&path, ConsensusParams::Test, random_seed(), &mock);
         assert!(
             err.is_err(),
             "second create_new must fail, not silently reopen"
@@ -867,7 +869,7 @@ mod tests {
         let mock = MockChainSource { tip: 1_000 };
         let w = SqliteShieldedWallet::create_new(
             &path,
-            Network::TestNetwork,
+            ConsensusParams::Test,
             SecretVec::new(seed.expose_secret().to_vec()),
             &mock,
         )
@@ -876,7 +878,7 @@ mod tests {
         let birthday_before = w.birthday_height().unwrap();
         drop(w);
 
-        let w = SqliteShieldedWallet::reopen(&path, Network::TestNetwork, seed).unwrap();
+        let w = SqliteShieldedWallet::reopen(&path, ConsensusParams::Test, seed).unwrap();
         assert_eq!(w.account_id(), id_before);
         assert_eq!(w.birthday_height().unwrap(), birthday_before);
         let _ = std::fs::remove_file(&path);
@@ -885,7 +887,7 @@ mod tests {
     #[test]
     fn reopen_missing_db_fails() {
         let path = tmp_path("reopen-missing");
-        let err = SqliteShieldedWallet::reopen(&path, Network::TestNetwork, random_seed());
+        let err = SqliteShieldedWallet::reopen(&path, ConsensusParams::Test, random_seed());
         assert!(err.is_err(), "reopen on missing db must fail");
     }
 
@@ -893,9 +895,14 @@ mod tests {
     fn restore_uses_explicit_birthday() {
         let path = tmp_path("restore");
         let mock = MockChainSource { tip: 10_000 };
-        let w =
-            SqliteShieldedWallet::restore(&path, Network::TestNetwork, random_seed(), 5_000, &mock)
-                .unwrap();
+        let w = SqliteShieldedWallet::restore(
+            &path,
+            ConsensusParams::Test,
+            random_seed(),
+            5_000,
+            &mock,
+        )
+        .unwrap();
         assert_eq!(
             w.birthday_height().unwrap(),
             5_000,

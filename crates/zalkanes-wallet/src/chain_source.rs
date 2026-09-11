@@ -8,10 +8,10 @@
 
 use anyhow::{anyhow, bail, Result};
 use serde::Deserialize;
+use zalkanes_core::consensus_params::ConsensusParams;
 use zcash_client_backend::data_api::chain::ChainState;
 use zcash_client_backend::proto::service::TreeState;
 use zcash_primitives::block::Block;
-use zcash_protocol::consensus::Network;
 
 use crate::funding::CanonicalTip;
 
@@ -28,12 +28,12 @@ pub trait CanonicalChainSource: crate::funding::TipSource {
 /// A [`CanonicalChainSource`] implemented against our own Zebra JSON-RPC.
 pub struct ZebraCanonicalChainSource {
     rpc_url: String,
-    network: Network,
+    network: ConsensusParams,
     client: reqwest::blocking::Client,
 }
 
 impl ZebraCanonicalChainSource {
-    pub fn new(rpc_url: impl Into<String>, network: Network) -> Result<Self> {
+    pub fn new(rpc_url: impl Into<String>, network: ConsensusParams) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
             .build()
@@ -168,9 +168,10 @@ impl CanonicalChainSource for ZebraCanonicalChainSource {
     fn tree_state(&self, height: u32) -> Result<ChainState> {
         let ts: TreestateResponse =
             self.rpc("z_gettreestate", serde_json::json!([height.to_string()]))?;
+        // Zebra reports regtest as "test" (it is a test-network variant).
         let network_name = match self.network {
-            Network::MainNetwork => "main",
-            Network::TestNetwork => "test",
+            ConsensusParams::Main => "main",
+            ConsensusParams::Test | ConsensusParams::Regtest => "test",
         };
         let tree_state = TreeState {
             network: network_name.to_string(),

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 use std::rc::Rc;
+use zalkanes_core::consensus_params::ConsensusParams;
 
 use anyhow::{anyhow, bail, Result};
 use secrecy::SecretVec;
@@ -16,7 +17,6 @@ use zalkanes_wallet::{
     funding::TipSource, FundContext, FundingSource, FundingUtxo, ShieldedFunding, ShieldedWallet,
     SqliteShieldedWallet, TransparentFunding, TxRequest, ZebraCanonicalChainSource,
 };
-use zcash_protocol::consensus::Network as ZcashNetwork;
 
 struct SharedWallet(Rc<SqliteShieldedWallet>);
 
@@ -162,11 +162,10 @@ fn main() -> Result<()> {
     let key = carrier_key(&wallet_dir)?;
     let seed_hex = std::fs::read_to_string(wallet_dir.join("seed"))?;
     let seed = SecretVec::new(hex::decode(seed_hex.trim())?);
-    let chain_source =
-        ZebraCanonicalChainSource::new(zebra_url.clone(), ZcashNetwork::TestNetwork)?;
+    let chain_source = ZebraCanonicalChainSource::new(zebra_url.clone(), ConsensusParams::Test)?;
     let wallet = Rc::new(SqliteShieldedWallet::reopen(
         &wallet_dir.join("wallet.sqlite"),
-        ZcashNetwork::TestNetwork,
+        ConsensusParams::Test,
         seed,
     )?);
     let funding = ShieldedFunding::new(

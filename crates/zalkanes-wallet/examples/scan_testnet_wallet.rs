@@ -5,10 +5,10 @@
 
 use anyhow::{anyhow, Result};
 use secrecy::SecretVec;
+use zalkanes_core::consensus_params::ConsensusParams;
 use zalkanes_wallet::{
     funding::TipSource, ShieldedWallet, SqliteShieldedWallet, ZebraCanonicalChainSource,
 };
-use zcash_protocol::consensus::Network;
 
 fn main() -> Result<()> {
     let rpc_url = std::env::var("ZALKANES_TESTNET_RPC_URL")
@@ -30,7 +30,7 @@ fn main() -> Result<()> {
         .to_string();
     let seed = SecretVec::new(hex::decode(&hex).map_err(|e| anyhow!("decode seed: {e}"))?);
 
-    let chain_source = ZebraCanonicalChainSource::new(rpc_url, Network::TestNetwork)?;
+    let chain_source = ZebraCanonicalChainSource::new(rpc_url, ConsensusParams::Test)?;
     let target = chain_source.canonical_tip()?;
     println!(
         "canonical tip: height={} hash={}",
@@ -38,7 +38,7 @@ fn main() -> Result<()> {
         hex::encode(target.hash)
     );
 
-    let wallet = SqliteShieldedWallet::reopen(&db_path, Network::TestNetwork, seed)?;
+    let wallet = SqliteShieldedWallet::reopen(&db_path, ConsensusParams::Test, seed)?;
     println!("UA:       {}", wallet.unified_address()?);
     println!("birthday: {}", wallet.birthday_height()?);
     println!("pre-scan balance: {} zat", wallet.balance()?);

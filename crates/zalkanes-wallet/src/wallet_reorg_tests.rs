@@ -13,6 +13,7 @@
 //! birthday-crossing refusal, restart windows, and clean-replay equality.
 
 use std::cell::RefCell;
+use zalkanes_core::consensus_params::ConsensusParams;
 
 use anyhow::{anyhow, bail, Result};
 use rand_core::{OsRng, RngCore};
@@ -20,7 +21,7 @@ use secrecy::SecretVec;
 use zcash_client_backend::data_api::chain::ChainState;
 use zcash_primitives::block::{Block, BlockHeaderData};
 use zcash_primitives::transaction::{Transaction, TransactionData, TxVersion};
-use zcash_protocol::consensus::{BlockHeight, BranchId, Network};
+use zcash_protocol::consensus::{BlockHeight, BranchId};
 use zcash_transparent::{
     address::Script,
     bundle::{Bundle, OutPoint, TxIn, TxOut},
@@ -206,7 +207,7 @@ impl CanonicalChainSource for SwappableChain {
             bail!("injected fault: chain source unavailable at height {h}");
         }
         let b = self.find(h)?;
-        Block::read(&b.bytes[..], &Network::TestNetwork).map_err(|e| anyhow!("parse block: {e}"))
+        Block::read(&b.bytes[..], &ConsensusParams::Test).map_err(|e| anyhow!("parse block: {e}"))
     }
     fn tree_state(&self, h: u32) -> Result<ChainState> {
         // Empty commitment trees throughout (no shielded outputs in the
@@ -243,7 +244,7 @@ fn synced_wallet(
     OsRng.fill_bytes(&mut seed_bytes);
     let seed = SecretVec::new(seed_bytes.clone());
     let wallet =
-        SqliteShieldedWallet::create_new(&path, Network::TestNetwork, seed, chain).unwrap();
+        SqliteShieldedWallet::create_new(&path, ConsensusParams::Test, seed, chain).unwrap();
     wallet.scan_to_tip(chain).unwrap();
     (path, SecretVec::new(seed_bytes), wallet)
 }
@@ -351,7 +352,7 @@ fn restart_immediately_before_rewind() {
     drop(wallet);
     chain.swap(fork(&base, base.len() - 5, 6, 2));
 
-    let wallet = SqliteShieldedWallet::reopen(&path, Network::TestNetwork, seed).unwrap();
+    let wallet = SqliteShieldedWallet::reopen(&path, ConsensusParams::Test, seed).unwrap();
     wallet.scan_to_tip(&chain).unwrap();
     assert_synced(&wallet, &chain);
     let _ = std::fs::remove_file(&path);
@@ -374,7 +375,7 @@ fn restart_after_rewind_mid_rescan() {
     assert!(err.to_string().contains("injected fault"), "got: {err}");
     drop(wallet); // process restart
 
-    let wallet = SqliteShieldedWallet::reopen(&path, Network::TestNetwork, seed).unwrap();
+    let wallet = SqliteShieldedWallet::reopen(&path, ConsensusParams::Test, seed).unwrap();
     wallet.scan_to_tip(&chain).unwrap();
     assert_synced(&wallet, &chain);
     let _ = std::fs::remove_file(&path);
@@ -425,4 +426,48 @@ fn recovered_wallet_equals_clean_fresh_replay() {
 
     let _ = std::fs::remove_file(&path_a);
     let _ = std::fs::remove_file(&path_b);
+}
+
+/// Regression for the live-regtest scan failure: the wallet stack must use
+/// REGTEST consensus parameters on regtest, not testnet ones.
+///
+/// Regtest activates every network upgrade at height 1, so a regtest block's
+/// coinbase commits to the regtest branch id. Parsing it under testnet
+/// parameters fails with "coinbase tx's claimed height doesn't match its
+/// consensus branch ID" — which is exactly how live regtest scanning broke
+/// at block 21.
+#[test]
+fn regtest_blocks_parse_under_regtest_params_not_testnet() {
+    use zcash_protocol::consensus::BranchId;
+
+    // At low heights regtest and testnet resolve DIFFERENT branch ids,
+    // because regtest activates everything at height 1.
+    let h = BlockHeight::from_u32(21);
+    let regtest = BranchId::for_height(&ConsensusParams::Regtest, h);
+    let testnet = BranchId::for_height(&ConsensusParams::Test, h);
+    assert_ne!(
+        regtest, testnet,
+        "if these matched, this regression could not be detected"
+    );
+
+    // A block built for regtest parses under regtest parameters...
+    let block = make_block(21, [0xEEu8; 32], 1);
+    Block::read(&block.bytes[..], &ConsensusParams::Regtest)
+        .expect("regtest block must parse under regtest parameters");
+
+    // ...and the wallet's chain source must therefore be constructed with
+    // regtest parameters for a regtest node. `ConsensusParams::for_network`
+    // is the single mapping that guarantees it.
+    assert_eq!(
+        ConsensusParams::for_network(zalkanes_core::types::Network::Regtest),
+        ConsensusParams::Regtest
+    );
+    assert_eq!(
+        ConsensusParams::for_network(zalkanes_core::types::Network::Testnet),
+        ConsensusParams::Test
+    );
+    assert_eq!(
+        ConsensusParams::for_network(zalkanes_core::types::Network::Mainnet),
+        ConsensusParams::Main
+    );
 }

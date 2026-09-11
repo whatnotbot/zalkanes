@@ -9,6 +9,7 @@
 //! wallet file.
 
 use std::sync::Barrier;
+use zalkanes_core::consensus_params::ConsensusParams;
 
 use rand_core::{OsRng, RngCore};
 use secrecy::SecretVec;
@@ -20,13 +21,13 @@ use zcash_client_backend::data_api::{
 use zcash_client_backend::wallet::OutputRef;
 use zcash_client_sqlite::{util::SystemClock, wallet::init::init_wallet_db, WalletDb};
 use zcash_primitives::block::BlockHash;
-use zcash_protocol::consensus::{BlockHeight, Network};
+use zcash_protocol::consensus::BlockHeight;
 use zcash_protocol::{PoolType, TxId};
 
-type Db = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
+type Db = WalletDb<rusqlite::Connection, ConsensusParams, SystemClock, OsRng>;
 
 fn open_db(path: &std::path::Path) -> Db {
-    let mut db = WalletDb::for_path(path, Network::TestNetwork, SystemClock, OsRng).unwrap();
+    let mut db = WalletDb::for_path(path, ConsensusParams::Test, SystemClock, OsRng).unwrap();
     init_wallet_db(&mut db, None).unwrap();
     db
 }

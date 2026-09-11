@@ -452,8 +452,9 @@ mod lifecycle_tests {
     use crate::funding::{CanonicalTip, TipSource};
     use crate::shielded::ShieldedWallet;
     use crate::sqlite::SqliteShieldedWallet;
+    use zalkanes_core::consensus_params::ConsensusParams;
     use zcash_client_backend::data_api::chain::ChainState;
-    use zcash_protocol::consensus::{BlockHeight, Network};
+    use zcash_protocol::consensus::BlockHeight;
 
     struct MockChain;
     impl TipSource for MockChain {
@@ -508,7 +509,7 @@ mod lifecycle_tests {
         Keystore::at(&p.ks)
             .create(&pw(pass), &seed, KeystoreNetwork::Testnet, 0)
             .unwrap();
-        let w = SqliteShieldedWallet::create_new(&p.db, Network::TestNetwork, seed, &MockChain)
+        let w = SqliteShieldedWallet::create_new(&p.db, ConsensusParams::Test, seed, &MockChain)
             .unwrap();
         w.unified_address().unwrap()
     }
@@ -519,7 +520,7 @@ mod lifecycle_tests {
         let ua = create_wallet(&p, "hunter2");
 
         // Restart: reopen WITHOUT any seed.
-        let w = SqliteShieldedWallet::open_locked(&p.db, Network::TestNetwork).unwrap();
+        let w = SqliteShieldedWallet::open_locked(&p.db, ConsensusParams::Test).unwrap();
         assert!(!w.is_unlocked(), "a fresh reopen must be LOCKED");
 
         // Watch-capable while locked.
@@ -547,7 +548,7 @@ mod lifecycle_tests {
         let p = paths("unlock");
         create_wallet(&p, "hunter2");
 
-        let w = SqliteShieldedWallet::open_locked(&p.db, Network::TestNetwork).unwrap();
+        let w = SqliteShieldedWallet::open_locked(&p.db, ConsensusParams::Test).unwrap();
         let seed = Keystore::at(&p.ks)
             .unlock(&pw("hunter2"), KeystoreNetwork::Testnet)
             .unwrap();
@@ -578,14 +579,14 @@ mod lifecycle_tests {
         let p = paths("restart");
         create_wallet(&p, "hunter2");
         {
-            let w = SqliteShieldedWallet::open_locked(&p.db, Network::TestNetwork).unwrap();
+            let w = SqliteShieldedWallet::open_locked(&p.db, ConsensusParams::Test).unwrap();
             let seed = Keystore::at(&p.ks)
                 .unlock(&pw("hunter2"), KeystoreNetwork::Testnet)
                 .unwrap();
             w.unlock_with_seed(&seed.clone_secret()).unwrap();
             assert!(w.is_unlocked());
         } // process restart
-        let w = SqliteShieldedWallet::open_locked(&p.db, Network::TestNetwork).unwrap();
+        let w = SqliteShieldedWallet::open_locked(&p.db, ConsensusParams::Test).unwrap();
         assert!(!w.is_unlocked(), "unlock must never persist across restart");
         let _ = std::fs::remove_dir_all(&p.dir);
     }
@@ -594,7 +595,7 @@ mod lifecycle_tests {
     fn wrong_passphrase_cannot_unlock_the_wallet() {
         let p = paths("wrongpw");
         create_wallet(&p, "hunter2");
-        let w = SqliteShieldedWallet::open_locked(&p.db, Network::TestNetwork).unwrap();
+        let w = SqliteShieldedWallet::open_locked(&p.db, ConsensusParams::Test).unwrap();
         match Keystore::at(&p.ks).unlock(&pw("nope"), KeystoreNetwork::Testnet) {
             Ok(_) => panic!("wrong passphrase must fail"),
             Err(e) => assert!(e.to_string().contains("wrong passphrase"), "got: {e}"),
@@ -607,7 +608,7 @@ mod lifecycle_tests {
     fn foreign_seed_is_rejected_at_unlock() {
         let p = paths("foreign");
         create_wallet(&p, "hunter2");
-        let w = SqliteShieldedWallet::open_locked(&p.db, Network::TestNetwork).unwrap();
+        let w = SqliteShieldedWallet::open_locked(&p.db, ConsensusParams::Test).unwrap();
         // A valid but UNRELATED seed must not silently unlock this account.
         match w.unlock_with_seed(&generate_seed()) {
             Ok(_) => panic!("foreign seed must be rejected"),
@@ -629,7 +630,7 @@ mod lifecycle_tests {
             .create(&pw("pw"), &seed, KeystoreNetwork::Testnet, 0)
             .unwrap();
         let original =
-            SqliteShieldedWallet::create_new(&p.db, Network::TestNetwork, seed, &MockChain)
+            SqliteShieldedWallet::create_new(&p.db, ConsensusParams::Test, seed, &MockChain)
                 .unwrap();
         let ua = original.unified_address().unwrap();
         drop(original);
@@ -638,7 +639,7 @@ mod lifecycle_tests {
         let p2 = paths("restore2");
         let restored = SqliteShieldedWallet::restore(
             &p2.db,
-            Network::TestNetwork,
+            ConsensusParams::Test,
             SecretVec::new(raw),
             900,
             &MockChain,
@@ -658,7 +659,7 @@ mod lifecycle_tests {
         Keystore::at(&p.ks)
             .create(&pw("pw"), &seed, KeystoreNetwork::Testnet, 0)
             .unwrap();
-        let w = SqliteShieldedWallet::create_new(&p.db, Network::TestNetwork, seed, &MockChain)
+        let w = SqliteShieldedWallet::create_new(&p.db, ConsensusParams::Test, seed, &MockChain)
             .unwrap();
         // Anything the wallet can print must not contain the seed.
         let printable = format!(
