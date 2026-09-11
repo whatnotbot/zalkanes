@@ -520,6 +520,21 @@ impl ShieldedWallet for SqliteShieldedWallet {
             .orchard_fvk
             .address_at(0u32, orchard::keys::Scope::Internal);
 
+        // NU6.3 consensus: the Orchard value balance must be non-negative, so
+        // no new value may enter the Orchard pool. On branches with Ironwood
+        // support (v6 transactions), change therefore returns to Ironwood;
+        // earlier branches keep Orchard change.
+        let target_branch =
+            zcash_protocol::consensus::BranchId::for_height(db.params(), target_height);
+        let change_pool =
+            if zcash_primitives::transaction::TxVersion::suggested_for_branch(target_branch)
+                .has_ironwood()
+            {
+                ValuePool::Ironwood
+            } else {
+                ValuePool::Orchard
+            };
+
         Ok(ShieldedSelection {
             spends,
             selected_value,
@@ -527,7 +542,7 @@ impl ShieldedWallet for SqliteShieldedWallet {
             change_fvk: self.orchard_fvk.clone(),
             change_ask: self.orchard_ask.clone(),
             change_ovk: Some(self.orchard_fvk.to_ovk(orchard::keys::Scope::Internal)),
-            change_pool: ValuePool::Orchard,
+            change_pool,
             anchor_height: u32::from(anchor_height),
             orchard_anchor,
             ironwood_anchor,

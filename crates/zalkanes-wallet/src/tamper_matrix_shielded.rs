@@ -96,6 +96,7 @@ struct MockWallet {
     spends: Vec<ShieldedSpend>,
     /// Diversifier index of the (internal-scope) change address.
     change_index: u32,
+    change_pool: ValuePool,
 }
 
 impl MockWallet {
@@ -103,6 +104,14 @@ impl MockWallet {
         Self {
             spends: vec![synthetic_spend(pool, NOTE_VALUE, seed)],
             change_index: 0,
+            change_pool: ValuePool::Orchard,
+        }
+    }
+
+    fn single_with_change(pool: ValuePool, seed: u8, change_pool: ValuePool) -> Self {
+        Self {
+            change_pool,
+            ..Self::single(pool, seed)
         }
     }
 }
@@ -153,7 +162,7 @@ impl ShieldedWallet for MockWallet {
             change_fvk: change_fvk.clone(),
             change_ask: self.spends[0].ask.clone(),
             change_ovk: Some(change_fvk.to_ovk(Scope::Internal)),
-            change_pool: ValuePool::Orchard,
+            change_pool: self.change_pool,
             anchor_height: 1,
             orchard_anchor,
             ironwood_anchor,
@@ -581,4 +590,53 @@ fn all_actions_signed_after_signer_round_trip() {
         .unwrap();
     assert!(all_signed.0, "every orchard action must be signed");
     assert!(all_signed.1, "every ironwood action must be signed");
+}
+
+/// NU6.3 shape: Ironwood-funded CALL with IRONWOOD change (the Orchard value
+/// balance must be non-negative from NU6.3 onward, so no Orchard change).
+/// The plan must build, verify cleanly, and leave every action signed after
+/// the Signer round-trip WITHOUT signing the change action (a plain output).
+#[test]
+fn ironwood_change_plan_verifies_and_signs_fully() {
+    let mut plan = shielded_call_plan(
+        MockWallet::single_with_change(ValuePool::Ironwood, 7, ValuePool::Ironwood),
+        tip(),
+    );
+    assert_eq!(plan.change_pool, 2, "plan must commit ironwood change");
+    assert!(
+        plan.orchard_sign.is_empty(),
+        "no orchard signing for an ironwood-change plan"
+    );
+    let bytes = take_pczt_bytes(&mut plan);
+    plan.verify_finalized_pczt(reparse(&bytes))
+        .expect("clean ironwood-change pczt verifies");
+
+    // Signer round-trip: every action in both pools ends up signed.
+    let mut signer = pczt::roles::signer::Signer::new(reparse(&bytes)).unwrap();
+    for (idx, ask) in &plan.ironwood_sign {
+        signer.sign_ironwood(*idx, ask).unwrap();
+    }
+    let pczt = signer.finish();
+    let mut all_signed = (true, false);
+    let v = pczt::roles::verifier::Verifier::new(pczt);
+    let v = v
+        .with_orchard::<String, _>(|b| {
+            all_signed.0 = b
+                .actions()
+                .iter()
+                .all(|a| a.spend().spend_auth_sig().is_some());
+            Ok(())
+        })
+        .unwrap();
+    let _ = v
+        .with_ironwood::<String, _>(|b| {
+            all_signed.1 = b
+                .actions()
+                .iter()
+                .all(|a| a.spend().spend_auth_sig().is_some());
+            Ok(())
+        })
+        .unwrap();
+    assert!(all_signed.0, "orchard (empty or padded) fully signed");
+    assert!(all_signed.1, "every ironwood action signed");
 }

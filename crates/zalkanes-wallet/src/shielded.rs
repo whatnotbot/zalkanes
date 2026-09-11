@@ -1354,14 +1354,17 @@ fn signing_plans(
         }
     }
 
-    let (change_meta, change_bucket) = match sel.change_pool {
-        ValuePool::Orchard => (orchard_meta, &mut orchard),
-        ValuePool::Ironwood => (ironwood_meta, &mut ironwood),
-    };
-    let change_idx = change_meta
-        .output_action_index(0)
-        .ok_or_else(|| anyhow!("change output missing action index"))?;
-    change_bucket.push((change_idx, sel.change_ask.clone()));
+    // Only an ORCHARD change output pairs with a fabricated wallet-controlled
+    // spend that we must sign (`add_change_output` in a cross-address-disabled
+    // bundle). An Ironwood change output is a plain output: its action's
+    // spend-half is either a real spend (signed above) or an io-finalizer-
+    // signed dummy — signing it with our key would be wrong.
+    if sel.change_pool == ValuePool::Orchard {
+        let change_idx = orchard_meta
+            .output_action_index(0)
+            .ok_or_else(|| anyhow!("change output missing action index"))?;
+        orchard.push((change_idx, sel.change_ask.clone()));
+    }
 
     Ok((orchard, ironwood))
 }

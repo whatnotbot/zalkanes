@@ -197,11 +197,22 @@ fn main() -> Result<()> {
     }
 
     // ── Broadcast through OUR Zebra ─────────────────────────────────────────
-    let sent = rpc_call(
+    // A broadcast REJECTION releases the note reservation (nothing is in
+    // flight). After an ACCEPTED broadcast the reservation is intentionally
+    // kept: the spend is in the mempool and the note must not be re-selected;
+    // scanning marks it spent once mined.
+    let sent = match rpc_call(
         &zebra_url,
         "sendrawtransaction",
         serde_json::json!([hex::encode(verified.bytes())]),
-    )?;
+    ) {
+        Ok(sent) => sent,
+        Err(e) => {
+            let _ = ShieldedWallet::release(&*wallet, &plan_id);
+            println!("broadcast rejected; note reservation released");
+            return Err(e);
+        }
+    };
     println!("broadcast accepted: {sent}");
 
     // ── Wait for mining ─────────────────────────────────────────────────────
