@@ -42,27 +42,26 @@ jobs:
           mkdir -p /tmp/zebra-regtest
           # Same activation heights as deploy/zebra/zebra-regtest.toml, so the
           # regtest chain runs the frozen NU6.3 rules the wallet targets.
+          # Byte-for-byte the same shape as deploy/zebra/zebra-regtest.toml
+          # (the known-good config), with ephemeral throwaway state.
           cat > /tmp/zebra-regtest/zebrad.toml <<'EOF'
           [network]
-          network = "Regtest"
+          network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
           listen_addr = "127.0.0.1:18233"
-
-          [network.testnet_parameters.activation_heights]
-          NU5 = 1
-          NU6 = 1
-          NU6_1 = 1
-          NU6_2 = 1
-          NU6_3 = 1
 
           [state]
           cache_dir = "/tmp/zebra-regtest/state"
           ephemeral = true
+
+          [consensus]
+          checkpoint_sync = false
 
           [rpc]
           listen_addr = "127.0.0.1:18232"
           enable_cookie_auth = false
 
           [mining]
+          internal_miner = false
           miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
           EOF
           zebrad -c /tmp/zebra-regtest/zebrad.toml start > /tmp/zebrad.log 2>&1 &
@@ -77,6 +76,12 @@ jobs:
             fi
             sleep 1
           done
+          if ! curl -s -m 2 -X POST http://127.0.0.1:18232 \
+               -H 'Content-Type: application/json' \
+               -d '{"jsonrpc":"1.0","id":"ci","method":"getblockchaininfo","params":[]}' \
+               | grep -q '"chain"'; then
+            echo "::error::zebrad did not come up"; tail -40 /tmp/zebrad.log; exit 1
+          fi
           curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
             -d '{"jsonrpc":"1.0","id":"ci","method":"getblockchaininfo","params":[]}' | head -c 400
           echo
