@@ -150,9 +150,12 @@ impl Journal {
             .unwrap_or(0)
     }
 
-    /// Record a new operation at `Planned` (or `Reserved`), transactionally.
+    /// Record a new operation at `Planned`, transactionally. `plan_id` is the
+    /// primary key; duplicate `plan_id` with identical immutable fields is an
+    /// idempotent no-op, and duplicate with any differing immutable field is a
+    /// `PlanIdConflict` error. Never overwrites an existing operation.
     #[allow(clippy::too_many_arguments)]
-    pub fn begin(
+    pub fn create_plan(
         &mut self,
         plan_id: &str,
         intent_hash: &str,
@@ -169,11 +172,11 @@ impl Journal {
             .transaction()
             .map_err(|e| anyhow!("journal tx: {e}"))?;
         let now = Self::now();
-        tx.execute(
-            "INSERT OR REPLACE INTO operations
+        let result = tx.execute(
+            "INSERT INTO operations
              (plan_id, intent_hash, kind, funding_mode, lock_owner, tip_height, tip_hash,
               target_height, selected_inputs, stage, txid, expiry, last_error, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'reserved', NULL, NULL, NULL, ?10, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'planned', NULL, NULL, NULL, ?10, ?10)",
             params![
                 plan_id,
                 intent_hash,
@@ -186,9 +189,66 @@ impl Journal {
                 selected_inputs,
                 now
             ],
-        )
-        .map_err(|e| anyhow!("journal begin: {e}"))?;
-        tx.commit().map_err(|e| anyhow!("journal commit: {e}"))?;
+        );
+        match result {
+            Ok(_) => {
+                tx.commit().map_err(|e| anyhow!("journal commit: {e}"))?;
+                Ok(())
+            }
+            Err(rusqlite::Error::SqliteFailure(e, _))
+                if e.code == rusqlite::ErrorCode::ConstraintViolation =>
+            {
+                let existing = tx
+                    .query_row(
+                        "SELECT intent_hash, kind, funding_mode, lock_owner, tip_height,
+                                tip_hash, target_height, selected_inputs
+                         FROM operations WHERE plan_id = ?1",
+                        params![plan_id],
+                        |row| {
+                            Ok((
+                                row.get::<_, String>(0)?,
+                                row.get::<_, String>(1)?,
+                                row.get::<_, String>(2)?,
+                                row.get::<_, String>(3)?,
+                                row.get::<_, i64>(4)?,
+                                row.get::<_, String>(5)?,
+                                row.get::<_, i64>(6)?,
+                                row.get::<_, String>(7)?,
+                            ))
+                        },
+                    )
+                    .map_err(|e| anyhow!("journal lookup {plan_id}: {e}"))?;
+                let (eh, ek, ef, el, eth, ethash, ett, esel) = existing;
+                let same = eh == intent_hash
+                    && ek == kind
+                    && ef == funding_mode
+                    && el == lock_owner
+                    && eth as u32 == tip_height
+                    && ethash == tip_hash
+                    && ett as u32 == target_height
+                    && esel == selected_inputs;
+                if same {
+                    // Idempotent: leave the existing operation untouched.
+                    tx.commit().map_err(|e| anyhow!("journal commit: {e}"))?;
+                    Ok(())
+                } else {
+                    let _ = tx.rollback();
+                    bail!(
+                        "PlanIdConflict: plan_id {plan_id} already exists with different immutable fields"
+                    );
+                }
+            }
+            Err(e) => {
+                let _ = tx.rollback();
+                Err(anyhow!("journal begin: {e}"))
+            }
+        }
+    }
+
+    /// Mark a `Planned` operation as `Reserved` (only after OutputLockStore
+    /// reservation has actually succeeded).
+    pub fn reserve(&mut self, plan_id: &str) -> Result<()> {
+        self.transition(plan_id, JournalStage::Reserved, None, None)?;
         Ok(())
     }
 
@@ -296,7 +356,15 @@ mod tests {
     use super::*;
 
     fn begin(j: &mut Journal, id: &str) {
-        j.begin(
+        j.create_plan(
+            id, "hash", "call", "shielded", "owner", 100, "aa", 101, "[]",
+        )
+        .unwrap();
+        j.reserve(id).unwrap();
+    }
+
+    fn create(j: &mut Journal, id: &str) {
+        j.create_plan(
             id, "hash", "call", "shielded", "owner", 100, "aa", 101, "[]",
         )
         .unwrap();
@@ -365,6 +433,101 @@ mod tests {
         // From unknown, it can resolve to accepted/mined/rejected/expired/reorged.
         j.transition("p1", JournalStage::BroadcastAccepted, None, None)
             .unwrap();
+    }
+
+    #[test]
+    fn duplicate_create_plan_is_idempotent_and_preserves_stage() {
+        let mut j = Journal::open_in_memory().unwrap();
+        create(&mut j, "p1");
+        j.reserve("p1").unwrap();
+        j.transition("p1", JournalStage::Proving, None, None)
+            .unwrap();
+        j.transition("p1", JournalStage::Proven, None, None)
+            .unwrap();
+        j.transition("p1", JournalStage::Signing, None, None)
+            .unwrap();
+        j.transition("p1", JournalStage::Signed, None, None)
+            .unwrap();
+        j.transition("p1", JournalStage::Extracted, None, None)
+            .unwrap();
+        j.transition("p1", JournalStage::Verified, Some("txid1"), None)
+            .unwrap();
+        j.transition("p1", JournalStage::Broadcasting, None, None)
+            .unwrap();
+        j.transition("p1", JournalStage::BroadcastUnknown, None, Some("timeout"))
+            .unwrap();
+
+        // Duplicate create_plan with identical fields is a no-op: stage, txid,
+        // and last_error are preserved.
+        create(&mut j, "p1");
+        assert_eq!(j.stage("p1").unwrap(), Some(JournalStage::BroadcastUnknown));
+        let txid: String = j
+            .conn
+            .query_row(
+                "SELECT txid FROM operations WHERE plan_id = 'p1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(txid, "txid1");
+        let err: String = j
+            .conn
+            .query_row(
+                "SELECT last_error FROM operations WHERE plan_id = 'p1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(err, "timeout");
+    }
+
+    #[test]
+    fn duplicate_create_plan_with_different_intent_fails() {
+        let mut j = Journal::open_in_memory().unwrap();
+        create(&mut j, "p1");
+        let r = j.create_plan(
+            "p1",
+            "different-hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[]",
+        );
+        assert!(r.is_err());
+        assert_eq!(j.stage("p1").unwrap(), Some(JournalStage::Planned));
+    }
+
+    #[test]
+    fn duplicate_create_plan_with_different_inputs_fails() {
+        let mut j = Journal::open_in_memory().unwrap();
+        create(&mut j, "p1");
+        let r = j.create_plan(
+            "p1",
+            "hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[different]",
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn planned_to_reserved_is_a_real_transition() {
+        let mut j = Journal::open_in_memory().unwrap();
+        create(&mut j, "p1");
+        assert_eq!(j.stage("p1").unwrap(), Some(JournalStage::Planned));
+        j.reserve("p1").unwrap();
+        assert_eq!(j.stage("p1").unwrap(), Some(JournalStage::Reserved));
+        // Reserving twice is idempotent (Reserved -> Reserved allowed).
+        j.reserve("p1").unwrap();
+        assert_eq!(j.stage("p1").unwrap(), Some(JournalStage::Reserved));
     }
 
     #[test]
