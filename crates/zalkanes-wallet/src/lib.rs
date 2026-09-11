@@ -29,6 +29,8 @@
 #[cfg(feature = "shielded")]
 pub mod chain_source;
 pub mod funding;
+#[cfg(feature = "shielded")]
+pub mod journal;
 pub mod plan;
 pub mod policy;
 #[cfg(feature = "shielded")]
@@ -46,6 +48,8 @@ pub use transparent::TransparentFunding;
 
 #[cfg(feature = "shielded")]
 pub use chain_source::{CanonicalChainSource, ZebraCanonicalChainSource};
+#[cfg(feature = "shielded")]
+pub use journal::{Journal, JournalStage};
 #[cfg(feature = "shielded")]
 pub use shielded::{ShieldedFunding, ShieldedSelection, ShieldedSpend, ShieldedWallet, SyncStatus};
 #[cfg(feature = "shielded")]
