@@ -21,12 +21,14 @@ use secrecy::{ExposeSecret, SecretVec};
 use sha2::{Digest, Sha256};
 use zcash_client_backend::{
     data_api::{
+        chain::ChainState,
         locking::{LockOwner, OutputLockStore},
         wallet::{
             input_selection::{LockFilter, LockedInputPolicy},
             ConfirmationsPolicy, TargetHeight,
         },
-        AccountBirthday, InputSource, TargetValue, WalletCommitmentTrees, WalletRead, WalletWrite,
+        AccountBirthday, BlockMetadata, InputSource, TargetValue, WalletCommitmentTrees,
+        WalletRead, WalletWrite,
     },
     scanning::{self, Nullifiers, ScanningKeys},
     wallet::{OutputRef, ReceivedNote},
@@ -134,47 +136,58 @@ impl SqliteShieldedWallet {
         let target = chain_source.canonical_tip()?;
         let network = *self.db.borrow().params();
 
-        let (ufvks, nullifiers) = {
+        // Compute everything requiring an immutable borrow BEFORE acquiring the
+        // mutable borrow (a nested borrow would panic the RefCell).
+        let (ufvks, nullifiers, start_height, mut prev_hash) = {
             let db = self.db.borrow();
             let ufvks = db
                 .get_unified_full_viewing_keys()
                 .map_err(|e| anyhow!("ufvks: {e}"))?;
-            (
-                ufvks,
-                Nullifiers::unspent(&*db).map_err(|e| anyhow!("nullifiers: {e}"))?,
-            )
+            let nullifiers = Nullifiers::unspent(&*db).map_err(|e| anyhow!("nullifiers: {e}"))?;
+            let start_height = match db
+                .block_fully_scanned()
+                .map_err(|e| anyhow!("block_fully_scanned: {e}"))?
+            {
+                Some(meta) => u32::from(meta.block_height()) + 1,
+                None => {
+                    let birthday = db
+                        .get_account_birthday(self.account_id)
+                        .map_err(|e| anyhow!("account birthday: {e}"))?;
+                    u32::from(birthday)
+                }
+            };
+            let prev_hash = match start_height {
+                h if h > 0 => db
+                    .get_block_hash(BlockHeight::from_u32(h - 1))
+                    .map_err(|e| anyhow!("block hash: {e}"))?
+                    .map(|b| b.0)
+                    .unwrap_or([0u8; 32]),
+                _ => [0u8; 32],
+            };
+            (ufvks, nullifiers, start_height, prev_hash)
         };
         let scanning_keys = ScanningKeys::from_account_ufvks(ufvks);
 
         let mut db = self.db.borrow_mut();
         let mut nullifiers = nullifiers;
-        let mut height = self.wallet_scan_tip()?.0 + 1;
+        let mut height = start_height;
 
         while height <= target.height {
-            // Reorg check: the wallet's scanned hash at height-1 must still match
-            // our Zebra; a mismatch means a fork and we bail to rewind/rescan.
-            if height > 0 {
-                let prev = BlockHeight::from_u32(height - 1);
-                let wallet_hash = db
-                    .get_block_hash(prev)
-                    .map_err(|e| anyhow!("wallet block hash: {e}"))?
-                    .map(|h| h.0)
-                    .unwrap_or([0u8; 32]);
-                let zebra_hash = chain_source.block_hash(height - 1)?;
-                if wallet_hash != zebra_hash {
-                    bail!(
-                        "reorg detected at height {}: wallet hash {}, zebra hash {}",
-                        height - 1,
-                        hex::encode(wallet_hash),
-                        hex::encode(zebra_hash)
-                    );
-                }
+            let from_state = chain_source.tree_state(height - 1)?;
+            // Reorg check (skip the very first block, where the wallet has no
+            // prior hash; continuity against the birthday prior state is enforced
+            // by put_blocks below).
+            if height > start_height && from_state.block_hash().0 != prev_hash {
+                bail!(
+                    "reorg detected at height {}: wallet hash {}, zebra hash {}",
+                    height - 1,
+                    hex::encode(prev_hash),
+                    hex::encode(from_state.block_hash().0)
+                );
             }
 
             let block = chain_source.block(height)?;
-            let prior_metadata = db
-                .block_metadata(BlockHeight::from_u32(height - 1))
-                .map_err(|e| anyhow!("block metadata: {e}"))?;
+            let prior_metadata = chain_state_to_block_metadata(&from_state);
             let (header, vtx) = scanning::full::decrypt_block(&network, block, &scanning_keys);
             let scanned = scanning::full::scan_block(
                 &network,
@@ -183,17 +196,22 @@ impl SqliteShieldedWallet {
                 vtx,
                 &scanning_keys,
                 &nullifiers,
-                prior_metadata.as_ref(),
+                Some(&prior_metadata),
                 |_addr| Ok::<_, std::convert::Infallible>(None),
             )
             .map_err(|e| anyhow!("scan block {height}: {e:?}"))?;
             nullifiers.update_with(&scanned);
 
-            let from_state = chain_source.tree_state(height - 1)?;
             db.put_blocks(&from_state, vec![scanned])
                 .map_err(|e| anyhow!("put block {height}: {e}"))?;
+            prev_hash = chain_source.block_hash(height)?;
             height += 1;
         }
+
+        // Tell the wallet the canonical chain tip (confirmations/spendability),
+        // separately from scan progress; sync is judged by fully_scanned() above.
+        db.update_chain_tip(BlockHeight::from_u32(target.height))
+            .map_err(|e| anyhow!("update_chain_tip: {e}"))?;
 
         // Post-scan re-verification: the canonical tip must be unchanged.
         let final_hash = chain_source.block_hash(target.height)?;
@@ -206,6 +224,25 @@ impl SqliteShieldedWallet {
         }
         self.set_canonical_tip(target);
         Ok(())
+    }
+
+    /// The next block height to scan (first fully-unscanned block): the last
+    /// fully-scanned block + 1, or the account birthday height if nothing has
+    /// been fully scanned yet. Never genesis/block 1 for a fresh account.
+    pub fn next_scan_height(&self) -> Result<u32> {
+        let db = self.db.borrow();
+        match db
+            .block_fully_scanned()
+            .map_err(|e| anyhow!("block_fully_scanned: {e}"))?
+        {
+            Some(meta) => Ok(u32::from(meta.block_height()) + 1),
+            None => {
+                let birthday = db
+                    .get_account_birthday(self.account_id)
+                    .map_err(|e| anyhow!("account birthday: {e}"))?;
+                Ok(u32::from(birthday))
+            }
+        }
     }
 
     pub fn account_id(&self) -> AccountUuid {
@@ -227,22 +264,18 @@ impl SqliteShieldedWallet {
         Ok(UnifiedAddress::encode(&ua, db.params()))
     }
 
-    /// Wallet scan tip (height + hash), or (0, [0;32]) if never scanned.
-    fn wallet_scan_tip(&self) -> Result<(u32, [u8; 32])> {
+    /// The wallet's fully-scanned progress (height + block hash), or `None` if
+    /// nothing has been fully scanned yet. Uses the upstream fully-scanned block
+    /// metadata, NOT the known chain tip.
+    fn fully_scanned(&self) -> Result<Option<(u32, [u8; 32])>> {
         let db = self.db.borrow();
-        let summary = db
-            .get_wallet_summary(ConfirmationsPolicy::MIN)
-            .map_err(|e| anyhow!("wallet summary: {e}"))?;
-        let height = summary.map_or(0, |s| u32::from(s.chain_tip_height()));
-        if height == 0 {
-            return Ok((0, [0u8; 32]));
+        match db
+            .block_fully_scanned()
+            .map_err(|e| anyhow!("block_fully_scanned: {e}"))?
+        {
+            Some(meta) => Ok(Some((u32::from(meta.block_height()), meta.block_hash().0))),
+            None => Ok(None),
         }
-        let hash = db
-            .get_block_hash(BlockHeight::from_u32(height))
-            .map_err(|e| anyhow!("wallet block hash: {e}"))?
-            .map(|h| h.0)
-            .unwrap_or([0u8; 32]);
-        Ok((height, hash))
     }
 
     /// The account's spendable balance (all pools), in zat.
@@ -273,7 +306,7 @@ impl SqliteShieldedWallet {
 
 impl ShieldedWallet for SqliteShieldedWallet {
     fn sync_status(&self, tip: crate::funding::CanonicalTip) -> Result<SyncStatus> {
-        let (scan_height, scan_hash) = self.wallet_scan_tip()?;
+        let (scan_height, scan_hash) = self.fully_scanned()?.unwrap_or((0, [0u8; 32]));
         // Spending is safe only when height AND hash both match the canonical
         // chain identity (a same-height reorg changes the hash).
         let synced = scan_height == tip.height && scan_hash == tip.hash;
@@ -430,6 +463,17 @@ impl ShieldedWallet for SqliteShieldedWallet {
     }
 }
 
+/// Derive a `BlockMetadata` (tree sizes) from a canonical `ChainState`.
+fn chain_state_to_block_metadata(cs: &ChainState) -> BlockMetadata {
+    BlockMetadata::from_parts(
+        cs.block_height(),
+        cs.block_hash(),
+        Some(u32::try_from(cs.final_sapling_tree().tree_size()).unwrap_or(0)),
+        Some(u32::try_from(cs.final_orchard_tree().tree_size()).unwrap_or(0)),
+        Some(u32::try_from(cs.final_ironwood_tree().tree_size()).unwrap_or(0)),
+    )
+}
+
 /// Map an Orchard-protocol value pool to the protocol-level shielded pool.
 fn pool_to_shielded_pool(pool: ValuePool) -> ShieldedPool {
     match pool {
@@ -452,11 +496,13 @@ mod tests {
     }
 
     /// A mock chain source returning an empty treestate (unit test only).
-    struct MockChainSource;
+    struct MockChainSource {
+        tip: u32,
+    }
     impl crate::chain_source::CanonicalChainSource for MockChainSource {
         fn canonical_tip(&self) -> Result<crate::funding::CanonicalTip> {
             Ok(crate::funding::CanonicalTip {
-                height: 200,
+                height: self.tip,
                 hash: [0u8; 32],
             })
         }
@@ -487,7 +533,7 @@ mod tests {
             &path,
             Network::TestNetwork,
             random_seed(),
-            &MockChainSource,
+            &MockChainSource { tip: 200 },
         )
         .unwrap();
 
@@ -504,6 +550,33 @@ mod tests {
             .unwrap();
         assert!(!status.synced);
         assert_eq!(status.wallet_scan_height, 0);
+
+        drop(wallet);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn fresh_wallet_first_scan_starts_at_birthday_not_genesis() {
+        let mut suffix = [0u8; 8];
+        OsRng.fill_bytes(&mut suffix);
+        let path = std::env::temp_dir().join(format!(
+            "zalkanes-wallet-firstscan-{}.sqlite",
+            hex::encode(suffix)
+        ));
+
+        // Tip 10_000 -> birthday prior state 9_900 -> first scan block 9_901.
+        let wallet = SqliteShieldedWallet::open_or_create(
+            &path,
+            Network::TestNetwork,
+            random_seed(),
+            &MockChainSource { tip: 10_000 },
+        )
+        .unwrap();
+        let start = wallet.next_scan_height().unwrap();
+        assert_eq!(
+            start, 9_901,
+            "first scan must start at birthday height, not 1"
+        );
 
         drop(wallet);
         let _ = std::fs::remove_file(&path);
