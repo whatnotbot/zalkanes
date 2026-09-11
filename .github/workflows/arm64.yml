@@ -1,0 +1,29 @@
+name: arm64-determinism
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # Native ARM64 Linux determinism (GitHub-hosted `ubuntu-24.04-arm` runners
+  # are available to public repositories). Runs the consensus test set —
+  # including verification of the committed execution vectors — in BOTH
+  # profiles, so state roots/fuel/outcomes are proven identical to the
+  # x86_64 jobs on genuinely native ARM64 hardware.
+  determinism:
+    name: native ARM64 Linux (debug + release)
+    runs-on: ubuntu-24.04-arm
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: 1
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - run: uname -m && rustc -vV || true
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: consensus tests (debug)
+        run: cargo test -p zalkanes-core -p zalkanes-protocol -p zalkanes-carrier -p zalkanes-state -p zalkanes-runtime -p zalkanes-testkit
+      - name: consensus tests (release, incl. scale stress)
+        run: cargo test --release -p zalkanes-core -p zalkanes-protocol -p zalkanes-carrier -p zalkanes-state -p zalkanes-runtime -p zalkanes-testkit

@@ -50,11 +50,19 @@ use super::{ShieldedSelection, ShieldedSpend, ShieldedWallet, SyncStatus};
 type Db = WalletDb<rusqlite::Connection, Network, SystemClock, OsRng>;
 
 /// A shielded wallet backed by `zcash_client_sqlite`.
+/// Spend authorization material, present only while the wallet is UNLOCKED.
+/// Derived from the seed in memory; never persisted.
+struct SpendingMaterial {
+    orchard_fvk: FullViewingKey,
+    orchard_ask: SpendAuthorizingKey,
+}
+
 pub struct SqliteShieldedWallet {
     db: RefCell<Db>,
     account_id: AccountUuid,
-    orchard_fvk: FullViewingKey,
-    orchard_ask: SpendAuthorizingKey,
+    /// `None` = LOCKED (watch-capable: scan/address/balance/status work, no
+    /// spend authorization possible). `Some` = UNLOCKED.
+    spending: RefCell<Option<SpendingMaterial>>,
     zebra_tip: Cell<u32>,
     zebra_tip_hash: Cell<[u8; 32]>,
 }
@@ -78,20 +86,72 @@ impl SqliteShieldedWallet {
         Ok((db, fvk, ask))
     }
 
-    fn from_parts(
-        db: Db,
-        account_id: AccountUuid,
-        fvk: FullViewingKey,
-        ask: SpendAuthorizingKey,
-    ) -> Self {
+    fn from_parts(db: Db, account_id: AccountUuid, spending: Option<SpendingMaterial>) -> Self {
         Self {
             db: RefCell::new(db),
             account_id,
-            orchard_fvk: fvk,
-            orchard_ask: ask,
+            spending: RefCell::new(spending),
             zebra_tip: Cell::new(0),
             zebra_tip_hash: Cell::new([0u8; 32]),
         }
+    }
+
+    /// Open the wallet WATCH-ONLY (locked): no seed, no spend authorization.
+    /// Scanning, address, balance, and status all work from the viewing key
+    /// already stored in the wallet database.
+    pub fn open_locked(path: &std::path::Path, network: Network) -> Result<Self> {
+        let mut db = WalletDb::for_path(path, network, SystemClock, OsRng)
+            .map_err(|e| anyhow!("open wallet db: {e}"))?;
+        zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None)
+            .map_err(|e| anyhow!("init wallet db: {e}"))?;
+        let account_id = db
+            .get_account_ids()
+            .map_err(|e| anyhow!("account ids: {e}"))?
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow!("wallet does not exist; use create or restore"))?;
+        Ok(Self::from_parts(db, account_id, None))
+    }
+
+    /// Whether spend authorization material is currently loaded.
+    pub fn is_unlocked(&self) -> bool {
+        self.spending.borrow().is_some()
+    }
+
+    /// Load spend authorization material from `seed`, after verifying the seed
+    /// actually derives THIS wallet's account (a wrong seed is rejected rather
+    /// than silently producing an unrelated key).
+    pub fn unlock_with_seed(&self, seed: &SecretVec<u8>) -> Result<()> {
+        let network = *self.db.borrow().params();
+        let usk = UnifiedSpendingKey::from_seed(&network, seed.expose_secret(), AccountId::ZERO)
+            .map_err(|e| anyhow!("derive unified spending key: {e}"))?;
+        let fvk = FullViewingKey::from(usk.orchard());
+
+        let stored = {
+            let db = self.db.borrow();
+            let ufvks = db
+                .get_unified_full_viewing_keys()
+                .map_err(|e| anyhow!("unified viewing keys: {e}"))?;
+            ufvks
+                .get(&self.account_id)
+                .and_then(|u| u.orchard().cloned())
+                .ok_or_else(|| anyhow!("account has no Orchard viewing key"))?
+        };
+        if stored.to_bytes() != fvk.to_bytes() {
+            bail!("unlock: seed does not derive this wallet's account");
+        }
+
+        *self.spending.borrow_mut() = Some(SpendingMaterial {
+            orchard_ask: SpendAuthorizingKey::from(usk.orchard()),
+            orchard_fvk: fvk,
+        });
+        Ok(())
+    }
+
+    /// Drop spend authorization material. Further signing is rejected until a
+    /// new unlock. (`SpendAuthorizingKey`/`FullViewingKey` zeroize on drop.)
+    pub fn lock(&self) {
+        *self.spending.borrow_mut() = None;
     }
 
     /// Create a NEW wallet. Fails if the wallet/account already exists. Derives
@@ -118,7 +178,14 @@ impl SqliteShieldedWallet {
         let (account_id, _) = db
             .create_account("zalkanes", &seed, &birthday, None)
             .map_err(|e| anyhow!("create account: {e}"))?;
-        Ok(Self::from_parts(db, account_id, fvk, ask))
+        Ok(Self::from_parts(
+            db,
+            account_id,
+            Some(SpendingMaterial {
+                orchard_fvk: fvk,
+                orchard_ask: ask,
+            }),
+        ))
     }
 
     /// Reopen an EXISTING wallet. Fails if it does not exist. Preserves the
@@ -133,7 +200,14 @@ impl SqliteShieldedWallet {
             .first()
             .copied()
             .ok_or_else(|| anyhow!("wallet does not exist; use create_new() or restore()"))?;
-        Ok(Self::from_parts(db, account_id, fvk, ask))
+        Ok(Self::from_parts(
+            db,
+            account_id,
+            Some(SpendingMaterial {
+                orchard_fvk: fvk,
+                orchard_ask: ask,
+            }),
+        ))
     }
 
     /// Restore a wallet from a seed at an EXPLICIT birthday height. Fails if the
@@ -163,7 +237,14 @@ impl SqliteShieldedWallet {
         let (account_id, _) = db
             .create_account("zalkanes", &seed, &birthday, None)
             .map_err(|e| anyhow!("restore account: {e}"))?;
-        Ok(Self::from_parts(db, account_id, fvk, ask))
+        Ok(Self::from_parts(
+            db,
+            account_id,
+            Some(SpendingMaterial {
+                orchard_fvk: fvk,
+                orchard_ask: ask,
+            }),
+        ))
     }
 
     /// Update the canonical Zebra tip (height + hash) this wallet plans against.
@@ -423,6 +504,14 @@ impl ShieldedWallet for SqliteShieldedWallet {
     }
 
     fn select_spends(&self, required_zat: u64, plan_id: &str) -> Result<ShieldedSelection> {
+        // Spend authorization is only available while UNLOCKED.
+        let (orchard_fvk, orchard_ask) = {
+            let spending = self.spending.borrow();
+            let m = spending.as_ref().ok_or_else(|| {
+                anyhow!("wallet is locked: unlock before authorizing a shielded spend")
+            })?;
+            (m.orchard_fvk.clone(), m.orchard_ask.clone())
+        };
         let zebra_tip = self.zebra_tip.get();
         let zebra_tip_hash = self.zebra_tip_hash.get();
         if zebra_tip == 0 {
@@ -521,8 +610,8 @@ impl ShieldedWallet for SqliteShieldedWallet {
                 u32::from(rn.output_index()),
             ));
             spends.push(ShieldedSpend {
-                fvk: self.orchard_fvk.clone(),
-                ask: self.orchard_ask.clone(),
+                fvk: orchard_fvk.clone(),
+                ask: orchard_ask.clone(),
                 note,
                 merkle_path,
                 value,
@@ -551,9 +640,7 @@ impl ShieldedWallet for SqliteShieldedWallet {
         db.lock_outputs(&output_refs, owner, lock_expiry)
             .map_err(|e| anyhow!("reserve notes (lock conflict?): {e:?}"))?;
 
-        let change_address = self
-            .orchard_fvk
-            .address_at(0u32, orchard::keys::Scope::Internal);
+        let change_address = orchard_fvk.address_at(0u32, orchard::keys::Scope::Internal);
 
         // NU6.3 consensus: the Orchard value balance must be non-negative, so
         // no new value may enter the Orchard pool. On branches with Ironwood
@@ -574,9 +661,9 @@ impl ShieldedWallet for SqliteShieldedWallet {
             spends,
             selected_value,
             change_address,
-            change_fvk: self.orchard_fvk.clone(),
-            change_ask: self.orchard_ask.clone(),
-            change_ovk: Some(self.orchard_fvk.to_ovk(orchard::keys::Scope::Internal)),
+            change_fvk: orchard_fvk.clone(),
+            change_ask: orchard_ask.clone(),
+            change_ovk: Some(orchard_fvk.to_ovk(orchard::keys::Scope::Internal)),
             change_pool,
             anchor_height: u32::from(anchor_height),
             orchard_anchor,
