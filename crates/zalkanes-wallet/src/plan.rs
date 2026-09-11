@@ -608,9 +608,27 @@ impl TransparentPlan {
             }
         }
 
-        // Fee via canonical value accounting (inputs - outputs).
+        // scriptSig content binding. ZIP-244 v5 txids exclude scriptSigs, so a
+        // mutated carrier payload does NOT change the txid: the content must be
+        // verified byte-exactly, independently of prevouts and outputs.
+        let script_sigs: Vec<&[u8]> = bundle
+            .vin
+            .iter()
+            .map(|vin| &vin.script_sig().0 .0[..])
+            .collect();
+        self.verify_script_sigs(&script_sigs)?;
+
+        // ACTUAL final fee via value accounting over the final transaction's
+        // outputs. Input values are not serialized in a transaction; they are
+        // bound through the exact prevout identity check above, so the planned
+        // input values are the values the network will enforce for those
+        // prevouts.
         let in_sum: u64 = self.prepared.inputs.iter().map(|i| i.value).sum();
-        let out_sum: u64 = self.prepared.outputs.iter().map(|o| o.value).sum();
+        let out_sum: u64 = bundle
+            .vout
+            .iter()
+            .try_fold(0u64, |acc, o| acc.checked_add(u64::from(o.value())))
+            .ok_or_else(|| anyhow!("output value overflow"))?;
         let actual_fee = in_sum
             .checked_sub(out_sum)
             .ok_or_else(|| anyhow!("negative fee"))?;
@@ -619,6 +637,96 @@ impl TransparentPlan {
                 "fee mismatch: extracted {actual_fee}, planned {}",
                 self.prepared.fee
             );
+        }
+
+        Ok(())
+    }
+
+    /// Verify every input's final scriptSig content against the plan:
+    ///
+    /// - P2PKH funding inputs: exactly `PUSH(sig) PUSH(pubkey)` with the plan's
+    ///   funding pubkey.
+    /// - Carrier inputs: exactly `PUSH(chunk_index) PUSH(chunk_data)...
+    ///   PUSH(sig) PUSH(redeem)` with the plan's chunk index, byte-exact chunk
+    ///   data, and byte-exact frozen redeem script.
+    /// - For DEPLOY, the deployment byte stream is re-reconstructed from the
+    ///   FINAL scriptSig contents and bound to the DEPLOY message's declared
+    ///   `code_length` and `code_hash` (the same reconstruction consensus
+    ///   performs).
+    ///
+    /// Signatures themselves are authorization data validated by consensus;
+    /// only their structural position (DER lead byte) is checked here.
+    fn verify_script_sigs(&self, script_sigs: &[&[u8]]) -> Result<()> {
+        let mut final_chunks: Vec<zalkanes_carrier::Chunk> = Vec::new();
+        for (i, (script_sig, plan_in)) in script_sigs.iter().zip(&self.prepared.inputs).enumerate()
+        {
+            let pushes = zalkanes_carrier::parse_script_pushes(script_sig);
+            match &plan_in.kind {
+                zalkanes_tx::SpendKind::P2pkh { key } => {
+                    if pushes.len() != 2 {
+                        bail!(
+                            "input {i}: p2pkh scriptSig push count {} != 2",
+                            pushes.len()
+                        );
+                    }
+                    if pushes[1].as_slice() != key.compressed_pubkey().as_slice() {
+                        bail!("input {i}: p2pkh scriptSig pubkey mismatch");
+                    }
+                    if pushes[0].first() != Some(&0x30) {
+                        bail!("input {i}: p2pkh scriptSig signature structure invalid");
+                    }
+                }
+                zalkanes_tx::SpendKind::Carrier {
+                    chunk_index,
+                    chunk_data,
+                    redeem_script,
+                    ..
+                } => {
+                    if pushes.len() < 4 {
+                        bail!(
+                            "input {i}: carrier scriptSig push count {} < 4",
+                            pushes.len()
+                        );
+                    }
+                    if pushes[0].as_slice() != [*chunk_index] {
+                        bail!("input {i}: carrier chunk index mismatch");
+                    }
+                    let redeem = pushes.last().expect("len >= 4");
+                    if redeem.as_slice() != redeem_script.as_slice() {
+                        bail!("input {i}: carrier redeem script mismatch");
+                    }
+                    let sig = &pushes[pushes.len() - 2];
+                    if sig.first() != Some(&0x30) {
+                        bail!("input {i}: carrier scriptSig signature structure invalid");
+                    }
+                    let data: Vec<u8> = pushes[1..pushes.len() - 2].concat();
+                    if data.as_slice() != chunk_data.as_slice() {
+                        bail!("input {i}: carrier chunk bytes mismatch");
+                    }
+                    final_chunks.push(zalkanes_carrier::Chunk {
+                        index: *chunk_index,
+                        data,
+                    });
+                }
+            }
+        }
+
+        // DEPLOY: bind the reconstructed deployment byte stream (from the FINAL
+        // scriptSigs, not the plan) to the DEPLOY message's declared length and
+        // code hash.
+        if let TxRequest::Deploy { op_return, .. } = &self.request {
+            let msg = zalkanes_protocol::parse_op_return(op_return)
+                .map_err(|e| anyhow!("DEPLOY plan op_return does not parse: {e:?}"))?;
+            let Some(zalkanes_protocol::Message::Deploy(d)) = msg else {
+                bail!("DEPLOY plan op_return is not a ZALK DEPLOY message");
+            };
+            zalkanes_carrier::reconstruct(
+                &final_chunks,
+                d.chunk_count,
+                d.code_length,
+                &d.code_hash,
+            )
+            .map_err(|e| anyhow!("deployment byte stream reconstruction failed: {e:?}"))?;
         }
 
         Ok(())
