@@ -36,6 +36,13 @@ impl ZebraCanonicalChainSource {
     pub fn new(rpc_url: impl Into<String>, network: ConsensusParams) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
+            // A wallet scan issues many rapid sequential RPCs. Reusing a
+            // keep-alive connection the node has already closed surfaces as
+            // "error sending request", aborting a scan mid-flight. Keeping no
+            // idle connections avoids that race entirely; the cost is one
+            // extra local TCP handshake per call against a loopback/private
+            // node.
+            .pool_max_idle_per_host(0)
             .build()
             .map_err(|e| anyhow!("build http client: {e}"))?;
         Ok(Self {
@@ -56,21 +63,41 @@ impl ZebraCanonicalChainSource {
             "method": method,
             "params": params,
         });
-        let resp: RpcResponse<T> = self
-            .client
-            .post(&self.rpc_url)
-            .header("Content-Type", "application/json")
-            .json(&body)
-            .send()
-            .map_err(|e| anyhow!("rpc {method}: {e}"))?
-            .json()
-            .map_err(|e| anyhow!("rpc {method} deserialize: {e}"))?;
-        resp.result.ok_or_else(|| {
-            anyhow!(
-                "rpc {method} error: {}",
-                resp.error.map(|e| e.message).unwrap_or_default()
-            )
-        })
+        // Bounded retry for TRANSPORT failures only. A JSON-RPC error reply is
+        // a real answer and is never retried; only connection/timeout errors
+        // are, so a single dropped connection cannot abort a long scan.
+        const MAX_ATTEMPTS: u32 = 5;
+        let mut last_transport_err = String::new();
+        for attempt in 0..MAX_ATTEMPTS {
+            match self
+                .client
+                .post(&self.rpc_url)
+                .header("Content-Type", "application/json")
+                .json(&body)
+                .send()
+            {
+                Ok(response) => {
+                    let parsed: RpcResponse<T> = response
+                        .json()
+                        .map_err(|e| anyhow!("rpc {method} deserialize: {e}"))?;
+                    return parsed.result.ok_or_else(|| {
+                        anyhow!(
+                            "rpc {method} error: {}",
+                            parsed.error.map(|e| e.message).unwrap_or_default()
+                        )
+                    });
+                }
+                Err(e) => {
+                    last_transport_err = e.to_string();
+                    if attempt + 1 < MAX_ATTEMPTS {
+                        std::thread::sleep(std::time::Duration::from_millis(
+                            100 * u64::from(attempt + 1),
+                        ));
+                    }
+                }
+            }
+        }
+        bail!("rpc {method}: {last_transport_err} (after {MAX_ATTEMPTS} attempts)")
     }
 }
 

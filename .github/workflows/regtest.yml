@@ -58,6 +58,12 @@ jobs:
           cache_dir = "/tmp/zebra-regtest/state"
           ephemeral = true
 
+          [sync]
+          # Isolated node: there are no peers to sync from, and the default
+          # crawler otherwise spends the whole job chasing an imaginary tip.
+          checkpoint_verify_concurrency_limit = 2
+          download_concurrency_limit = 2
+
           [consensus]
           checkpoint_sync = false
 
