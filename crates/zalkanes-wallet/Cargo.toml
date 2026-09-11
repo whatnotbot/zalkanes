@@ -71,3 +71,7 @@ required-features = ["shielded"]
 [[example]]
 name = "shielded_call_testnet"
 required-features = ["shielded"]
+
+[[example]]
+name = "shielded_deploy_testnet"
+required-features = ["shielded"]

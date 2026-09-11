@@ -640,3 +640,59 @@ fn ironwood_change_plan_verifies_and_signs_fully() {
     assert!(all_signed.0, "orchard (empty or padded) fully signed");
     assert!(all_signed.1, "every ironwood action signed");
 }
+
+/// Item 13 byte-equality: the SAME logical CALL funded transparently and
+/// shielded produces byte-identical ZALK payloads and byte-identical on-chain
+/// OP_RETURN scripts (outer transaction bytes are NOT required to match).
+/// The payload constant below is the exact live payload broadcast on public
+/// testnet in txids fe266af5..7fd5 and 58ee8880..a9a0.
+#[test]
+fn byte_equality_transparent_vs_shielded_call() {
+    let mut contract = [0u8; 32];
+    hex::decode_to_slice(
+        "607a6246c512239a23f51cf8053444d4d76e7684c1a53dc26a626b474a8cf3c0",
+        &mut contract,
+    )
+    .unwrap();
+    let op_return = zalkanes_protocol::encode_call(&zalkanes_protocol::CallMessage {
+        contract_id: zalkanes_core::types::ContractId(contract),
+        opcode: 1,
+        input: vec![],
+    });
+    assert_eq!(
+        hex::encode(&op_return),
+        "5a414c4b0002607a6246c512239a23f51cf8053444d4d76e7684c1a53dc26a626b474a8cf3c000010000",
+        "payload must equal the live-broadcast bytes"
+    );
+    let req = TxRequest::Call {
+        op_return: op_return.clone(),
+    };
+    let ctx = FundContext::new(Network::Regtest, tip());
+
+    let shielded = ShieldedFunding::new(Box::new(MockWallet::single(ValuePool::Ironwood, 7)), None)
+        .plan(&req, &ctx)
+        .unwrap();
+    let transparent = crate::transparent::TransparentFunding::new(
+        zalkanes_tx::SigningKey::dev_key(),
+        vec![crate::funding::FundingUtxo {
+            outpoint: zalkanes_tx::OutPoint::new([0xF0u8; 32], 0),
+            value: 1_000_000,
+        }],
+    )
+    .plan(&req, &ctx)
+    .unwrap();
+
+    // ZALK payload bytes exactly identical across funding pools.
+    assert_eq!(shielded.zalk_payload_hex(), transparent.zalk_payload_hex());
+
+    // The on-chain OP_RETURN scriptPubKey bytes are exactly identical too.
+    let (FundingPlan::Shielded(sp), FundingPlan::Transparent(tp)) = (&shielded, &transparent)
+    else {
+        unreachable!("plans carry their pools");
+    };
+    assert_eq!(
+        sp.transparent_outputs[0].script, tp.prepared.outputs[0].script_pubkey,
+        "OP_RETURN script bytes must be byte-identical"
+    );
+    assert_eq!(sp.transparent_outputs[0].value, 0);
+}
