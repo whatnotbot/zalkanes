@@ -248,6 +248,26 @@ mod tests {
     }
 
     #[test]
+    fn funding_mode_does_not_alter_zalk_payload() {
+        // The ZALK payload is funding-pool-agnostic: transparent funding must
+        // commit the exact canonical bytes. The shielded path serializes the
+        // same `TxRequest` op_return through the shared `op_return_script`,
+        // so the byte-equality is structural (see docs/compatibility.md).
+        let payload: Vec<u8> = vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02, 0xaa, 0xbb];
+        let req = TxRequest::Call {
+            op_return: payload.clone(),
+        };
+        let plan = funding().plan(&req, &ctx()).unwrap();
+
+        // The plan's committed payload is byte-exact.
+        assert_eq!(plan.zalk_payload_hex(), hex::encode(&payload));
+        // The on-chain OP_RETURN script wraps exactly those bytes.
+        let script = zalkanes_tx::op_return_script(&payload);
+        assert_eq!(script[0], 0x6a); // OP_RETURN
+        assert_eq!(&script[2..], &payload[..]);
+    }
+
+    #[test]
     fn pool_name_is_transparent() {
         assert_eq!(funding().pool_name(), "transparent");
     }
