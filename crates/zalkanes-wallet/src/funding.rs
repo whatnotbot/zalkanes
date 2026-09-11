@@ -8,7 +8,7 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use zalkanes_core::types::Network;
 use zalkanes_tx::OutPoint;
 use zcash_protocol::consensus::BranchId;
@@ -86,19 +86,41 @@ pub struct CanonicalTip {
 pub struct FundContext {
     /// Which network the transaction targets.
     pub network: Network,
-    /// Target height, used to resolve the consensus branch id for signing.
+    /// The canonical chain tip (an existing block with a known height + hash)
+    /// the plan is pinned to.
+    pub chain_tip: CanonicalTip,
+    /// The height whose consensus rules / expiry / witness-selection semantics
+    /// the new transaction is built for (normally `chain_tip.height + 1`).
     pub target_height: u32,
-    /// The canonical tip (height + block hash) the plan is pinned to.
-    pub target_hash: [u8; 32],
 }
 
 impl FundContext {
+    /// Construct a context where the transaction targets the block immediately
+    /// after the canonical tip.
+    pub fn new(network: Network, chain_tip: CanonicalTip) -> Self {
+        Self {
+            network,
+            chain_tip,
+            target_height: chain_tip.height + 1,
+        }
+    }
+
     /// The canonical tip this context is pinned to.
     pub fn canonical_tip(&self) -> CanonicalTip {
-        CanonicalTip {
-            height: self.target_height,
-            hash: self.target_hash,
+        self.chain_tip
+    }
+
+    /// Enforce the intended relationship: the transaction target height is the
+    /// block after the canonical tip.
+    pub fn validate(&self) -> Result<()> {
+        if self.target_height != self.chain_tip.height + 1 {
+            bail!(
+                "target_height {} must be chain_tip.height + 1 ({})",
+                self.target_height,
+                self.chain_tip.height + 1
+            );
         }
+        Ok(())
     }
 
     /// The consensus branch id active at [`Self::target_height`].
@@ -197,5 +219,31 @@ mod tests {
         };
         assert_eq!(prepare.opcode(), None);
         assert_eq!(prepare.kind(), "prepare");
+    }
+
+    #[test]
+    fn branch_selection_uses_target_height_not_chain_tip() {
+        use zcash_protocol::consensus::{NetworkUpgrade, Parameters, TestNetwork};
+        // Find a real testnet upgrade boundary (Nu6_3).
+        let nu6_3 = TestNetwork
+            .activation_height(NetworkUpgrade::Nu6_3)
+            .map(u32::from)
+            .unwrap();
+
+        // chain_tip is one block BEFORE the boundary; target_height is AT it.
+        let ctx = FundContext::new(
+            Network::Testnet,
+            CanonicalTip {
+                height: nu6_3 - 1,
+                hash: [0u8; 32],
+            },
+        );
+        assert_eq!(ctx.target_height, nu6_3);
+
+        // The branch must be resolved from target_height, not chain_tip.height.
+        let expected = zalkanes_core::branch_id_for_height(Network::Testnet, nu6_3);
+        let from_tip = zalkanes_core::branch_id_for_height(Network::Testnet, nu6_3 - 1);
+        assert_eq!(ctx.branch_id(), expected);
+        assert_ne!(ctx.branch_id(), from_tip);
     }
 }

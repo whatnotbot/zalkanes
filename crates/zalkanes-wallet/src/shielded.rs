@@ -147,6 +147,7 @@ impl FundingSource for ShieldedFunding {
     }
 
     fn plan(&self, request: &TxRequest, ctx: &FundContext) -> Result<crate::plan::FundingPlan> {
+        ctx.validate()?;
         match request {
             TxRequest::Call { op_return } => self.plan_call(op_return, ctx),
             TxRequest::Prepare { carrier_values } => {
@@ -208,13 +209,14 @@ impl ShieldedFunding {
             transparent_outputs,
             op_return,
             2,
-        );
+        )?;
 
         Ok(crate::plan::FundingPlan::Shielded(Box::new(ShieldedPlan {
             stage: Stage::Planned,
             selected_value: sel.selected_value,
             fee,
             change,
+            change_destination: sel.change_address.to_raw_address_bytes().to_vec(),
             branch_id,
             target_height: ctx.target_height,
             canonical_tip: ctx.canonical_tip(),
@@ -297,13 +299,14 @@ impl ShieldedFunding {
             transparent_outputs,
             &[],
             0,
-        );
+        )?;
 
         Ok(crate::plan::FundingPlan::Shielded(Box::new(ShieldedPlan {
             stage: Stage::Planned,
             selected_value: sel.selected_value,
             fee,
             change,
+            change_destination: sel.change_address.to_raw_address_bytes().to_vec(),
             branch_id,
             target_height: ctx.target_height,
             canonical_tip: ctx.canonical_tip(),
@@ -335,7 +338,7 @@ fn commit_shielded(
     transparent_outputs: Vec<crate::plan::PlanOutput>,
     zalk_payload: &[u8],
     kind: u8,
-) -> String {
+) -> Result<String> {
     let inputs: Vec<crate::plan::PlanInput> = sel
         .spends
         .iter()
@@ -351,33 +354,65 @@ fn commit_shielded(
         })
         .collect();
 
-    let anchor_root = sel
-        .orchard_anchor
-        .map(|a| a.to_bytes())
-        .unwrap_or([0u8; 32]);
-    let tx_ver = if tx_version == "v6" { 6 } else { 5 };
+    // Commit a pool-tagged anchor for every pool actually spent. An absent
+    // anchor for a spent pool is an error (no zero-root substitution).
+    let mut anchors = Vec::new();
+    let mut has_orchard = false;
+    let mut has_ironwood = false;
+    for s in &sel.spends {
+        match s.pool {
+            ValuePool::Orchard => has_orchard = true,
+            ValuePool::Ironwood => has_ironwood = true,
+        }
+    }
+    if has_orchard {
+        let root = sel
+            .orchard_anchor
+            .ok_or_else(|| anyhow!("Orchard spend without Orchard anchor"))?
+            .to_bytes();
+        anchors.push(crate::plan::PlanAnchor {
+            pool: 1,
+            height: ctx.chain_tip.height,
+            root,
+        });
+    }
+    if has_ironwood {
+        let root = sel
+            .ironwood_anchor
+            .ok_or_else(|| anyhow!("Ironwood spend without Ironwood anchor"))?
+            .to_bytes();
+        anchors.push(crate::plan::PlanAnchor {
+            pool: 2,
+            height: ctx.chain_tip.height,
+            root,
+        });
+    }
 
-    crate::plan::commit_plan(
+    let tx_ver = if tx_version == "v6" { 6 } else { 5 };
+    let change_destination = sel.change_address.to_raw_address_bytes().to_vec();
+
+    Ok(crate::plan::commit_plan(
         ctx.network.id_byte(),
         0, // protocol version
         1, // shielded pool
+        ctx.chain_tip.height,
+        &ctx.chain_tip.hash,
         ctx.target_height,
-        &ctx.target_hash,
         u32::from(branch_id),
         tx_ver,
         expiry_height,
         &inputs,
-        ctx.target_height,
-        &anchor_root,
+        &anchors,
         &transparent_outputs,
         Some(&crate::plan::PlanChange {
             value: change,
             pool: 1,
+            destination_bytes: change_destination,
         }),
         fee,
         zalk_payload,
         kind,
-    )
+    ))
 }
 
 /// A prepared (unproven, unsigned) shielded plan.
@@ -386,6 +421,9 @@ pub struct ShieldedPlan {
     pub selected_value: u64,
     pub fee: u64,
     pub change: u64,
+    /// Canonical serialized change destination, retained for the post-extract
+    /// invariant layer.
+    pub change_destination: Vec<u8>,
     pub branch_id: BranchId,
     pub target_height: u32,
     pub canonical_tip: crate::funding::CanonicalTip,

@@ -43,11 +43,24 @@ pub struct PlanOutput {
     pub script: Vec<u8>,
 }
 
+/// A pool-tagged shielded anchor, for the plan commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanAnchor {
+    /// 1 = Orchard, 2 = Ironwood.
+    pub pool: u8,
+    pub height: u32,
+    pub root: [u8; 32],
+}
+
 /// The exact shielded change, for the plan commitment.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PlanChange {
     pub value: u64,
     pub pool: u8,
+    /// Canonical serialized destination material (the raw receiver address
+    /// bytes), so two PCZTs sending the same amount to different shielded
+    /// addresses cannot share a plan hash.
+    pub destination_bytes: Vec<u8>,
 }
 
 /// The canonical, domain-separated binary plan commitment (a SHA-256 over a
@@ -59,14 +72,14 @@ pub fn commit_plan(
     network_id: u8,
     protocol_version: u8,
     pool: u8,
+    chain_tip_height: u32,
+    chain_tip_hash: &[u8; 32],
     target_height: u32,
-    target_hash: &[u8; 32],
     branch_id: u32,
     tx_version: u8,
     expiry_height: u32,
     inputs: &[PlanInput],
-    anchor_height: u32,
-    anchor_root: &[u8; 32],
+    anchors: &[PlanAnchor],
     transparent_outputs: &[PlanOutput],
     shielded_change: Option<&PlanChange>,
     fee: u64,
@@ -78,8 +91,9 @@ pub fn commit_plan(
     buf.push(network_id);
     buf.push(protocol_version);
     buf.push(pool);
+    buf.extend_from_slice(&chain_tip_height.to_le_bytes());
+    buf.extend_from_slice(chain_tip_hash);
     buf.extend_from_slice(&target_height.to_le_bytes());
-    buf.extend_from_slice(target_hash);
     buf.extend_from_slice(&branch_id.to_le_bytes());
     buf.push(tx_version);
     buf.extend_from_slice(&expiry_height.to_le_bytes());
@@ -92,8 +106,12 @@ pub fn commit_plan(
         buf.extend_from_slice(&i.value.to_le_bytes());
     }
 
-    buf.extend_from_slice(&anchor_height.to_le_bytes());
-    buf.extend_from_slice(anchor_root);
+    buf.extend_from_slice(&(anchors.len() as u16).to_le_bytes());
+    for a in anchors {
+        buf.push(a.pool);
+        buf.extend_from_slice(&a.height.to_le_bytes());
+        buf.extend_from_slice(&a.root);
+    }
 
     buf.extend_from_slice(&(transparent_outputs.len() as u16).to_le_bytes());
     for o in transparent_outputs {
@@ -107,6 +125,8 @@ pub fn commit_plan(
             buf.push(1);
             buf.extend_from_slice(&c.value.to_le_bytes());
             buf.push(c.pool);
+            buf.extend_from_slice(&(c.destination_bytes.len() as u16).to_le_bytes());
+            buf.extend_from_slice(&c.destination_bytes);
         }
         None => buf.push(0),
     }
@@ -334,12 +354,19 @@ impl FundingPlan {
     }
 
     // ── Authorization stages ───────────────────────────────────────────────
+    //
+    // Every stage takes the current canonical tip and enforces freshness
+    // internally, so a broadcast-capable caller cannot bypass the gate: a plan
+    // made against a different chain identity is rejected before any proof,
+    // signature, or extraction work happens.
 
     /// Produce any zero-knowledge proofs required by this transaction.
     ///
     /// A no-op for transparent plans. For shielded plans this runs the PCZT
-    /// Prover role. Calling out of order is an error.
-    pub fn prove(&mut self) -> Result<()> {
+    /// Prover role. Rejects the plan if `current_tip` no longer matches the
+    /// chain identity the plan was pinned to.
+    pub fn prove(&mut self, current_tip: CanonicalTip) -> Result<()> {
+        self.check_freshness(current_tip)?;
         match self {
             FundingPlan::Transparent(p) => p.prove(),
             #[cfg(feature = "shielded")]
@@ -347,8 +374,10 @@ impl FundingPlan {
         }
     }
 
-    /// Apply authorizing signatures (transparent and/or shielded).
-    pub fn sign(&mut self) -> Result<()> {
+    /// Apply authorizing signatures (transparent and/or shielded), after
+    /// re-verifying the canonical tip.
+    pub fn sign(&mut self, current_tip: CanonicalTip) -> Result<()> {
+        self.check_freshness(current_tip)?;
         match self {
             FundingPlan::Transparent(p) => p.sign(),
             #[cfg(feature = "shielded")]
@@ -356,8 +385,10 @@ impl FundingPlan {
         }
     }
 
-    /// Extract the final, network-ready serialized transaction.
-    pub fn extract(&mut self) -> Result<SignedTx> {
+    /// Extract the final, network-ready serialized transaction, after
+    /// re-verifying the canonical tip.
+    pub fn extract(&mut self, current_tip: CanonicalTip) -> Result<SignedTx> {
+        self.check_freshness(current_tip)?;
         match self {
             FundingPlan::Transparent(p) => p.extract(),
             #[cfg(feature = "shielded")]
@@ -466,397 +497,156 @@ fn zat_to_zec(zat: u64) -> String {
 mod tests {
     use super::*;
 
-    fn base() -> String {
-        commit_plan(
-            2,          // network id
-            0,          // protocol version
-            1,          // shielded pool
-            100,        // target height
-            &[1u8; 32], // target hash
-            0x1234,     // branch id
-            6,          // tx version
-            120,        // expiry height
-            &[PlanInput {
+    struct Spec {
+        network_id: u8,
+        protocol_version: u8,
+        pool: u8,
+        chain_tip_height: u32,
+        chain_tip_hash: [u8; 32],
+        target_height: u32,
+        branch_id: u32,
+        tx_version: u8,
+        expiry_height: u32,
+        inputs: Vec<PlanInput>,
+        anchors: Vec<PlanAnchor>,
+        outputs: Vec<PlanOutput>,
+        change: Option<PlanChange>,
+        fee: u64,
+        zalk: Vec<u8>,
+        kind: u8,
+    }
+
+    impl Spec {
+        fn base() -> Self {
+            Spec {
+                network_id: 2,
+                protocol_version: 0,
                 pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32], // anchor root
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00], // ZALK payload
-            2,             // CALL
-        )
+                chain_tip_height: 100,
+                chain_tip_hash: [1u8; 32],
+                target_height: 101,
+                branch_id: 0x1234,
+                tx_version: 6,
+                expiry_height: 120,
+                inputs: vec![PlanInput {
+                    pool: 1,
+                    txid: [2u8; 32],
+                    output_index: 0,
+                    value: 50_000,
+                }],
+                anchors: vec![PlanAnchor {
+                    pool: 1,
+                    height: 100,
+                    root: [3u8; 32],
+                }],
+                outputs: vec![PlanOutput {
+                    value: 0,
+                    script: vec![0x6a, 0x02, 0x02, 0x00],
+                }],
+                change: Some(PlanChange {
+                    value: 40_000,
+                    pool: 1,
+                    destination_bytes: vec![9u8; 43],
+                }),
+                fee: 10_000,
+                zalk: vec![0x02, 0x00],
+                kind: 2,
+            }
+        }
+
+        fn commit(&self) -> String {
+            commit_plan(
+                self.network_id,
+                self.protocol_version,
+                self.pool,
+                self.chain_tip_height,
+                &self.chain_tip_hash,
+                self.target_height,
+                self.branch_id,
+                self.tx_version,
+                self.expiry_height,
+                &self.inputs,
+                &self.anchors,
+                &self.outputs,
+                self.change.as_ref(),
+                self.fee,
+                &self.zalk,
+                self.kind,
+            )
+        }
     }
 
     #[test]
     fn identical_serialization_produces_identical_hash() {
-        assert_eq!(base(), base());
+        assert_eq!(Spec::base().commit(), Spec::base().commit());
     }
 
     #[test]
     fn any_field_mutation_changes_hash() {
-        let b = base();
+        let b = Spec::base().commit();
 
-        // network id
-        let h = commit_plan(
-            3,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.network_id = 3;
+        assert_ne!(b, s.commit(), "network id");
 
-        // note (input identity)
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [9u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.inputs[0].txid = [9u8; 32];
+        assert_ne!(b, s.commit(), "note identity");
 
-        // input value
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_001,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.inputs[0].value = 50_001;
+        assert_ne!(b, s.commit(), "input value");
 
-        // fee
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_001,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.fee = 10_001;
+        assert_ne!(b, s.commit(), "fee");
 
-        // change
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_001,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.change.as_mut().unwrap().value = 40_001;
+        assert_ne!(b, s.commit(), "change value");
 
-        // ZALK byte
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x01],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.change.as_mut().unwrap().destination_bytes = vec![7u8; 43];
+        assert_ne!(b, s.commit(), "change destination");
 
-        // carrier/output
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 1,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.zalk[1] = 0x01;
+        assert_ne!(b, s.commit(), "zalk byte");
 
-        // target block hash
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[7u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.outputs[0].value = 1;
+        assert_ne!(b, s.commit(), "carrier/output value");
 
-        // anchor root
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[8u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.chain_tip_hash = [7u8; 32];
+        assert_ne!(b, s.commit(), "chain tip hash");
 
-        // expiry height
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            6,
-            121,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.anchors[0].root = [8u8; 32];
+        assert_ne!(b, s.commit(), "orchard anchor root");
 
-        // tx version
-        let h = commit_plan(
-            2,
-            0,
-            1,
-            100,
-            &[1u8; 32],
-            0x1234,
-            5,
-            120,
-            &[PlanInput {
-                pool: 1,
-                txid: [2u8; 32],
-                output_index: 0,
-                value: 50_000,
-            }],
-            100,
-            &[3u8; 32],
-            &[PlanOutput {
-                value: 0,
-                script: vec![0x6a, 0x02, 0x02, 0x00],
-            }],
-            Some(&PlanChange {
-                value: 40_000,
-                pool: 1,
-            }),
-            10_000,
-            &[0x02, 0x00],
-            2,
-        );
-        assert_ne!(b, h);
+        let mut s = Spec::base();
+        s.anchors.push(PlanAnchor {
+            pool: 2,
+            height: 100,
+            root: [4u8; 32],
+        });
+        assert_ne!(b, s.commit(), "ironwood anchor added");
+
+        let mut s = Spec::base();
+        s.anchors[0].pool = 2;
+        assert_ne!(b, s.commit(), "anchor pool tag");
+
+        let mut s = Spec::base();
+        s.expiry_height = 121;
+        assert_ne!(b, s.commit(), "expiry height");
+
+        let mut s = Spec::base();
+        s.tx_version = 5;
+        assert_ne!(b, s.commit(), "tx version");
+
+        let mut s = Spec::base();
+        s.target_height = 102;
+        assert_ne!(b, s.commit(), "target height");
     }
 }

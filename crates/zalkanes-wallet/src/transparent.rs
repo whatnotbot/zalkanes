@@ -75,6 +75,7 @@ impl FundingSource for TransparentFunding {
     }
 
     fn plan(&self, request: &TxRequest, ctx: &FundContext) -> Result<FundingPlan> {
+        ctx.validate()?;
         if self.utxos.is_empty() {
             bail!("no transparent funding UTXOs available");
         }
@@ -110,14 +111,14 @@ impl FundingSource for TransparentFunding {
             ctx.network.id_byte(),
             0, // protocol version
             0, // transparent pool
+            ctx.chain_tip.height,
+            &ctx.chain_tip.hash,
             ctx.target_height,
-            &ctx.target_hash,
             u32::from(branch_id),
             5, // tx version
             0, // expiry
             &inputs,
-            0,
-            &[0u8; 32],
+            &[], // no shielded anchors
             &outputs,
             None,
             prepared.fee,
@@ -144,12 +145,15 @@ mod tests {
     use super::*;
     use zalkanes_core::types::Network;
 
-    fn ctx() -> FundContext {
-        FundContext {
-            network: Network::Regtest,
-            target_height: 1,
-            target_hash: [0u8; 32],
+    fn tip() -> crate::funding::CanonicalTip {
+        crate::funding::CanonicalTip {
+            height: 1,
+            hash: [0u8; 32],
         }
+    }
+
+    fn ctx() -> FundContext {
+        FundContext::new(Network::Regtest, tip())
     }
 
     fn funding() -> TransparentFunding {
@@ -185,11 +189,11 @@ mod tests {
         // describe() works without proving/signing.
         assert!(plan.describe().contains("Funding pool"));
 
-        plan.prove().unwrap();
+        plan.prove(tip()).unwrap();
         assert_eq!(plan.stage(), Stage::Proven);
-        plan.sign().unwrap();
+        plan.sign(tip()).unwrap();
         assert_eq!(plan.stage(), Stage::Signed);
-        let tx = plan.extract().unwrap();
+        let tx = plan.extract(tip()).unwrap();
         assert_eq!(plan.stage(), Stage::Extracted);
         assert!(!tx.bytes.is_empty());
         assert_ne!(tx.txid, [0u8; 32]);
