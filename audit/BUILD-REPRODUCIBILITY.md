@@ -69,9 +69,20 @@ manifest is compiled in via `include_str!`). Runtime configuration is
 environment-driven; **no secrets are baked into the image**. Zebra images
 (`deploy/zebra/`) build `zebrad` from the pinned `v6.3.0` git tag.
 
-## Status
+## Verified result
 
-The reproducibility gate is **enforced in CI as of this commit**; consult the
-`release-engineering` workflow run for the specific candidate to see the
-recorded digests and verdict. Reproducibility is not claimed here beyond what
-that job actually verified.
+Run `34652938852` (workflow `release-engineering`), both targets **success**:
+
+| target | build A sha256 | build B sha256 | verdict |
+|---|---|---|---|
+| `x86_64-unknown-linux-gnu` | `f0b197471f70d24a346ddcbbf42d4676b873d31990b7fea679804c36a3934e6c` | identical | **reproducible** |
+| `aarch64-unknown-linux-gnu` | `f72f36e598047e3fd30b4992d699470d96c726f91a4d86754d1963c27b7a579c` | identical | **reproducible** |
+
+(The two targets naturally differ from each other; what is asserted is that
+two independent clean builds of the SAME target are byte-identical.)
+
+Protocol manifest recorded by the same run:
+`57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752`.
+
+Re-verify for any candidate by re-running the workflow at that commit; the
+job fails if the digests diverge, so a green run IS the proof.
