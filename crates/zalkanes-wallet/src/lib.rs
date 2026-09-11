@@ -31,6 +31,8 @@ pub mod plan;
 pub mod policy;
 #[cfg(feature = "shielded")]
 pub mod shielded;
+#[cfg(feature = "shielded")]
+pub mod sqlite;
 pub mod transparent;
 
 pub use funding::{FundContext, FundingPool, FundingSource, FundingUtxo, TxRequest};
@@ -39,4 +41,6 @@ pub use policy::PrivacyPolicy;
 pub use transparent::TransparentFunding;
 
 #[cfg(feature = "shielded")]
-pub use shielded::{ShieldedFunding, ShieldedSelection, ShieldedSpend, ShieldedWallet};
+pub use shielded::{ShieldedFunding, ShieldedSelection, ShieldedSpend, ShieldedWallet, SyncStatus};
+#[cfg(feature = "shielded")]
+pub use sqlite::SqliteShieldedWallet;

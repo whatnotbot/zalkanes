@@ -67,18 +67,50 @@ pub struct ShieldedSelection {
     pub change_pool: ValuePool,
     pub orchard_anchor: Option<Anchor>,
     pub ironwood_anchor: Option<Anchor>,
+    /// The wallet-local output references reserved by this selection (used to
+    /// release them later).
+    pub output_refs: Vec<zcash_client_backend::wallet::OutputRef>,
+    /// The lock owner under which `output_refs` were reserved.
+    pub lock_owner: zcash_client_backend::data_api::locking::LockOwner,
 }
 
-/// Provider of shielded notes + witnesses + change address.
+/// The sync state of the shielded wallet relative to our Zebra tip.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SyncStatus {
+    /// The canonical chain tip height as reported by our Zebra.
+    pub zebra_tip: u32,
+    /// The height the wallet has scanned through.
+    pub wallet_scan_tip: u32,
+    /// Whether shielded spending is safe (`wallet_scan_tip == zebra_tip`).
+    pub synced: bool,
+    /// The anchor height a shielded spend would use, if any.
+    pub anchor_height: Option<u32>,
+}
+
+/// Provider of shielded notes + witnesses + change address + durable output
+/// locks (reservations).
 ///
 /// The `zcash_client_sqlite`-backed implementation lives behind this trait so
-/// the wallet crate does not hard-code the SQLite store; it is implemented in a
-/// follow-up change (`crates/zalkanes-wallet/src/sqlite.rs`).
+/// the wallet crate does not hard-code the SQLite store; see
+/// `crates/zalkanes-wallet/src/sqlite.rs`.
 pub trait ShieldedWallet {
-    /// Select notes covering at least `required_zat`, returning the spends and
-    /// the change address/anchors. Must fail (rather than return stale
-    /// witnesses) if the wallet is not synced to the caller's target height.
-    fn select_spends(&self, required_zat: u64) -> Result<ShieldedSelection>;
+    /// Reports the wallet's scan tip against `zebra_tip` and whether shielded
+    /// spending is safe.
+    fn sync_status(&self, zebra_tip: u32) -> Result<SyncStatus>;
+
+    /// Select notes covering at least `required_zat`, atomically reserving them
+    /// under a lock derived from `plan_id`, and return the spends, change
+    /// address, anchors, and the reservation handles needed to release them.
+    ///
+    /// Must fail (rather than return stale witnesses) if the wallet is not
+    /// synced to the caller's target height, and must fail (rather than
+    /// double-select) if any selected note is already reserved by a different
+    /// plan.
+    fn select_spends(&self, required_zat: u64, plan_id: &str) -> Result<ShieldedSelection>;
+
+    /// Release the reservations held by `plan_id` (used on cancellation,
+    /// proof/signing failure, or known broadcast rejection).
+    fn release(&self, plan_id: &str) -> Result<()>;
 }
 
 /// A shielded funding source: Orchard/Ironwood notes selected by a
@@ -132,6 +164,17 @@ impl ShieldedFunding {
         let target_height = BlockHeight::from_u32(ctx.target_height);
         let branch_id = ctx.branch_id();
 
+        let request = TxRequest::Call {
+            op_return: op_return.to_vec(),
+        };
+        let plan_id = crate::plan::new_plan_id();
+        let intent_hash = crate::plan::intent_hash_of(
+            ctx.network.zebra_name(),
+            ctx.target_height,
+            "shielded",
+            &request,
+        );
+
         // Deterministic, bounded fee/change selection loop: transparent output
         // value is zero for CALL, so `selected = fee + change`.
         let (sel, fee) = select_for(
@@ -142,6 +185,7 @@ impl ShieldedFunding {
             &[],
             op_return,
             0,
+            &plan_id,
         )?;
         let change = sel.selected_value - fee;
 
@@ -159,14 +203,14 @@ impl ShieldedFunding {
             target_height: ctx.target_height,
             tx_version,
             expiry_height,
-            request: TxRequest::Call {
-                op_return: op_return.to_vec(),
-            },
+            request,
             pczt: Some(pczt),
             orchard_sign,
             ironwood_sign,
             circuit_version: circuit_version(branch_id)?,
             signed: None,
+            plan_id,
+            intent_hash,
         })))
     }
 
@@ -191,6 +235,17 @@ impl ShieldedFunding {
             carrier_values.iter().map(|v| (carrier_addr, *v)).collect();
         let carrier_total: u64 = carrier_values.iter().sum();
 
+        let request = TxRequest::Prepare {
+            carrier_values: carrier_values.to_vec(),
+        };
+        let plan_id = crate::plan::new_plan_id();
+        let intent_hash = crate::plan::intent_hash_of(
+            ctx.network.zebra_name(),
+            ctx.target_height,
+            "shielded",
+            &request,
+        );
+
         let (sel, fee) = select_for(
             &*self.wallet,
             &params,
@@ -199,6 +254,7 @@ impl ShieldedFunding {
             &carriers,
             &[],
             carrier_total,
+            &plan_id,
         )?;
         let change = sel
             .selected_value
@@ -220,14 +276,14 @@ impl ShieldedFunding {
             target_height: ctx.target_height,
             tx_version,
             expiry_height,
-            request: TxRequest::Prepare {
-                carrier_values: carrier_values.to_vec(),
-            },
+            request,
             pczt: Some(pczt),
             orchard_sign,
             ironwood_sign,
             circuit_version: circuit_version(branch_id)?,
             signed: None,
+            plan_id,
+            intent_hash,
         })))
     }
 }
@@ -250,6 +306,8 @@ pub struct ShieldedPlan {
     pub ironwood_sign: Vec<(usize, SpendAuthorizingKey)>,
     pub circuit_version: OrchardCircuitVersion,
     pub signed: Option<SignedTx>,
+    pub plan_id: String,
+    pub intent_hash: String,
 }
 
 impl ShieldedPlan {
@@ -386,6 +444,7 @@ fn select_for(
     carriers: &[(TransparentAddress, u64)],
     op_return: &[u8],
     required_value: u64,
+    plan_id: &str,
 ) -> Result<(ShieldedSelection, u64)> {
     let fee_rule = FeeRule::standard();
     let mut required = required_value
@@ -393,7 +452,7 @@ fn select_for(
         .ok_or_else(|| anyhow!("required value overflow"))?;
 
     for _ in 0..MAX_SELECT_ITERATIONS {
-        let sel = wallet.select_spends(required)?;
+        let sel = wallet.select_spends(required, plan_id)?;
         // Measure the exact fee with one change output present (fee depends only
         // on action counts/sizes, never on values).
         let fee = {

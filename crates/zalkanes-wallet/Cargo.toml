@@ -10,7 +10,9 @@ zalkanes-tx       = { workspace = true }
 anyhow            = { workspace = true }
 thiserror         = { workspace = true }
 hex               = { workspace = true }
+sha2              = { workspace = true }
 zcash_protocol    = { workspace = true }
+rand_core         = { version = "=0.6.4", features = ["getrandom"] }
 
 # Shielded funding (Orchard/Ironwood) via the lower-level PCZT pipeline.
 pczt                 = { workspace = true, optional = true }
@@ -18,10 +20,13 @@ zcash_primitives     = { workspace = true, optional = true }
 zcash_client_backend = { workspace = true, optional = true }
 zcash_client_sqlite  = { workspace = true, optional = true }
 zcash_proofs         = { workspace = true, optional = true }
+zcash_keys           = { workspace = true, optional = true }
 orchard              = { workspace = true, optional = true }
 zcash_transparent    = { workspace = true, optional = true }
 secp256k1            = { workspace = true, optional = true }
-rand_core            = { version = "=0.6.4", features = ["getrandom"], optional = true }
+secrecy              = { version = "=0.8.0", optional = true }
+rusqlite             = { version = "=0.37.0", features = ["bundled"], optional = true }
+zip32                = { version = "=0.2.1", optional = true }
 
 [features]
 default = []
@@ -34,10 +39,13 @@ shielded = [
     "dep:zcash_client_backend",
     "dep:zcash_client_sqlite",
     "dep:zcash_proofs",
+    "dep:zcash_keys",
     "dep:orchard",
     "dep:zcash_transparent",
     "dep:secp256k1",
-    "dep:rand_core",
+    "dep:secrecy",
+    "dep:rusqlite",
+    "dep:zip32",
     "zcash_primitives?/circuits",
 ]
 

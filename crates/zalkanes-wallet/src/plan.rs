@@ -9,11 +9,64 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{bail, Result};
+use rand_core::{OsRng, RngCore};
+use sha2::{Digest, Sha256};
 use zalkanes_tx::SignedTx;
 use zcash_protocol::consensus::BranchId;
 
 use crate::funding::TxRequest;
 use crate::policy::PrivacyPolicy;
+
+/// A fresh random, hex-encoded plan id. Unique per plan; the same id is retained
+/// across `prove`/`sign`/`extract` so the plan is never silently re-selected.
+pub fn new_plan_id() -> String {
+    let mut bytes = [0u8; 32];
+    OsRng.fill_bytes(&mut bytes);
+    hex::encode(bytes)
+}
+
+/// A SHA-256 hash of the immutable transaction intent: the parts of the request
+/// that must not change between `plan()` and `extract()`.
+pub fn intent_hash_of(
+    network: &str,
+    target_height: u32,
+    pool: &str,
+    request: &TxRequest,
+) -> String {
+    let mut h = Sha256::new();
+    h.update(b"zalkanes-plan-v1\0");
+    h.update(network.as_bytes());
+    h.update(target_height.to_le_bytes());
+    h.update(pool.as_bytes());
+    match request {
+        TxRequest::Prepare { carrier_values } => {
+            h.update(b"prepare");
+            for v in carrier_values {
+                h.update(v.to_le_bytes());
+            }
+        }
+        TxRequest::Deploy {
+            chunks,
+            carrier_values,
+            op_return,
+            ..
+        } => {
+            h.update(b"deploy");
+            h.update(op_return);
+            for v in carrier_values {
+                h.update(v.to_le_bytes());
+            }
+            for c in chunks {
+                h.update((c.len() as u64).to_le_bytes());
+            }
+        }
+        TxRequest::Call { op_return } => {
+            h.update(b"call");
+            h.update(op_return);
+        }
+    }
+    hex::encode(h.finalize())
+}
 
 /// Authorization stage of a [`FundingPlan`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -184,6 +237,24 @@ impl FundingPlan {
         lines.join("\n")
     }
 
+    /// The unique, random plan id (stable across `prove`/`sign`/`extract`).
+    pub fn plan_id(&self) -> &str {
+        match self {
+            FundingPlan::Transparent(p) => &p.plan_id,
+            #[cfg(feature = "shielded")]
+            FundingPlan::Shielded(p) => &p.plan_id,
+        }
+    }
+
+    /// The SHA-256 hash of the immutable transaction intent.
+    pub fn intent_hash(&self) -> &str {
+        match self {
+            FundingPlan::Transparent(p) => &p.intent_hash,
+            #[cfg(feature = "shielded")]
+            FundingPlan::Shielded(p) => &p.intent_hash,
+        }
+    }
+
     // ── Authorization stages ───────────────────────────────────────────────
 
     /// Produce any zero-knowledge proofs required by this transaction.
@@ -233,6 +304,8 @@ pub struct TransparentPlan {
     pub target_height: u32,
     pub stage: Stage,
     pub signed: Option<SignedTx>,
+    pub plan_id: String,
+    pub intent_hash: String,
 }
 
 impl TransparentPlan {

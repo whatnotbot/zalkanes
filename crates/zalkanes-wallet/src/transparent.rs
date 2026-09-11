@@ -79,6 +79,13 @@ impl FundingSource for TransparentFunding {
             bail!("no transparent funding UTXOs available");
         }
         let prepared = self.build_plan(request)?;
+        let plan_id = crate::plan::new_plan_id();
+        let intent_hash = crate::plan::intent_hash_of(
+            ctx.network.zebra_name(),
+            ctx.target_height,
+            "transparent",
+            request,
+        );
         Ok(FundingPlan::Transparent(Box::new(TransparentPlan {
             prepared,
             request: request.clone(),
@@ -86,6 +93,8 @@ impl FundingSource for TransparentFunding {
             target_height: ctx.target_height,
             stage: Stage::Planned,
             signed: None,
+            plan_id,
+            intent_hash,
         })))
     }
 }
