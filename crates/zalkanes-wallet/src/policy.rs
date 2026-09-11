@@ -1,9 +1,15 @@
 //! Transaction privacy policy, mirroring Zallet's `z_sendmany` vocabulary.
 //!
-//! A Zalkanes transaction always publishes the ZALK message (OP_RETURN) and any
-//! carrier data in cleartext, so the minimum policy a Zalkanes transaction
-//! requires is [`PrivacyPolicy::AllowRevealedAmounts`]. The CLI displays this
-//! requirement and asks the caller to acknowledge it before signing.
+//! This vocabulary is about **value and address** privacy only. It is
+//! deliberately kept distinct from the separate Zalkanes disclosure that
+//! contract metadata (contract id, opcode, calldata) is always public on chain.
+//!
+//! The minimum policy a transaction requires is computed **per transaction** by
+//! [`crate::plan::FundingPlan::minimum_policy`], not applied globally. For
+//! example a fully-shielded CALL (shielded spend + zero-value OP_RETURN +
+//! shielded change) requires `FullPrivacy`, while a shielded PREPARE (which
+//! deshields value into transparent carrier outputs) requires
+//! `AllowRevealedAmounts`.
 //!
 //! This is a UX/disclosure layer only — it does not change execution semantics
 //! or any consensus rule.
@@ -45,12 +51,6 @@ impl PrivacyPolicy {
             PrivacyPolicy::NoPrivacy => "NoPrivacy",
         }
     }
-
-    /// The minimum policy every Zalkanes transaction requires.
-    ///
-    /// PREPARE deshields funding into carrier P2SH outputs (value-bearing), so
-    /// amounts are always revealed on chain regardless of funding pool.
-    pub const ZALKANES_MINIMUM: Self = PrivacyPolicy::AllowRevealedAmounts;
 
     /// Whether `self` permits everything `required` does (i.e. `self` is at
     /// least as permissive as `required`).
@@ -119,13 +119,6 @@ mod tests {
         for w in order.windows(2) {
             assert!(w[1] > w[0], "{:?} should permit more than {:?}", w[1], w[0]);
         }
-    }
-
-    #[test]
-    fn zalkanes_minimum_permits_amounts_but_not_recipients() {
-        assert!(PrivacyPolicy::ZALKANES_MINIMUM.permits(PrivacyPolicy::AllowRevealedAmounts));
-        assert!(!PrivacyPolicy::ZALKANES_MINIMUM.permits(PrivacyPolicy::AllowRevealedRecipients));
-        assert!(PrivacyPolicy::NoPrivacy.permits(PrivacyPolicy::ZALKANES_MINIMUM));
     }
 
     #[test]

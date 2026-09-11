@@ -1,12 +1,13 @@
-//! Transparent funding: spend P2PKH UTXOs via the existing `zalkanes-tx`
-//! V5/ZIP-244 builder, returning transparent change.
+//! Transparent funding: plan and sign P2PKH-funded transactions via the
+//! existing `zalkanes-tx` V5/ZIP-244 builder, returning transparent change.
 
 #![forbid(unsafe_code)]
 
 use anyhow::{bail, Result};
-use zalkanes_tx::{self, OutPoint, SignedTx, SigningKey};
+use zalkanes_tx::{self, OutPoint, SigningKey};
 
 use crate::funding::{FundContext, FundingSource, FundingUtxo, TxRequest};
+use crate::plan::{FundingPlan, Stage, TransparentPlan};
 
 /// A transparent funding source holding a signing key and its known UTXOs.
 #[derive(Clone)]
@@ -36,6 +37,36 @@ impl TransparentFunding {
             .map(|u| (u.outpoint.clone(), u.value))
             .collect()
     }
+
+    fn build_plan(&self, request: &TxRequest) -> Result<zalkanes_tx::PreparedTx> {
+        match request {
+            TxRequest::Prepare { carrier_values } => {
+                if carrier_values.is_empty() {
+                    bail!("PREPARE requires at least one carrier output");
+                }
+                zalkanes_tx::prepare_plan(&self.key, &self.outpoints_and_values(), carrier_values)
+            }
+            TxRequest::Deploy {
+                chunks,
+                carrier_outpoints,
+                carrier_values,
+                op_return,
+            } => zalkanes_tx::deploy_plan(
+                &self.key,
+                carrier_outpoints,
+                carrier_values,
+                chunks,
+                op_return,
+            ),
+            TxRequest::Call { op_return } => {
+                let utxo = self
+                    .utxos
+                    .first()
+                    .ok_or_else(|| anyhow::anyhow!("no funding UTXO for CALL"))?;
+                zalkanes_tx::call_plan(&self.key, utxo.outpoint.clone(), utxo.value, op_return)
+            }
+        }
+    }
 }
 
 impl FundingSource for TransparentFunding {
@@ -43,71 +74,36 @@ impl FundingSource for TransparentFunding {
         "transparent"
     }
 
-    fn fund(&self, request: &TxRequest, ctx: &FundContext) -> Result<SignedTx> {
+    fn plan(&self, request: &TxRequest, ctx: &FundContext) -> Result<FundingPlan> {
         if self.utxos.is_empty() {
             bail!("no transparent funding UTXOs available");
         }
-        let branch_id = ctx.branch_id();
-        match request {
-            TxRequest::Prepare { carrier_values } => {
-                if carrier_values.is_empty() {
-                    bail!("PREPARE requires at least one carrier output");
-                }
-                zalkanes_tx::build_prepare(
-                    &self.key,
-                    &self.outpoints_and_values(),
-                    carrier_values,
-                    branch_id,
-                )
-            }
-            TxRequest::Deploy {
-                chunks,
-                carrier_outpoints,
-                carrier_values,
-                op_return,
-            } => zalkanes_tx::build_deploy(
-                &self.key,
-                carrier_outpoints,
-                carrier_values,
-                chunks,
-                op_return,
-                branch_id,
-            ),
-            TxRequest::Call { op_return } => {
-                let utxo = self
-                    .utxos
-                    .first()
-                    .ok_or_else(|| anyhow::anyhow!("no funding UTXO for CALL"))?;
-                zalkanes_tx::build_call(
-                    &self.key,
-                    utxo.outpoint.clone(),
-                    utxo.value,
-                    op_return,
-                    branch_id,
-                )
-            }
-        }
+        let prepared = self.build_plan(request)?;
+        Ok(FundingPlan::Transparent(Box::new(TransparentPlan {
+            prepared,
+            request: request.clone(),
+            branch_id: ctx.branch_id(),
+            target_height: ctx.target_height,
+            stage: Stage::Planned,
+            signed: None,
+        })))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::policy::PrivacyPolicy;
     use zalkanes_core::types::Network;
 
     fn ctx() -> FundContext {
         FundContext {
             network: Network::Regtest,
             target_height: 1,
-            policy: PrivacyPolicy::NoPrivacy,
         }
     }
 
     fn funding() -> TransparentFunding {
         let key = SigningKey::dev_key();
-        // A synthetic outpoint: txid 0x01.., vout 0. The value is chosen well
-        // above the ZIP-317 minimum fee so change is produced.
         let mut txid = [0u8; 32];
         txid[0] = 1;
         let outpoint = OutPoint::new(txid, 0);
@@ -115,14 +111,44 @@ mod tests {
     }
 
     #[test]
-    fn call_produces_signed_tx_with_change() {
+    fn call_plan_has_no_signatures_and_stages() {
         let f = funding();
         let req = TxRequest::Call {
             op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02],
         };
-        let tx = f.fund(&req, &ctx()).unwrap();
+        let mut plan = f.plan(&req, &ctx()).unwrap();
+        assert_eq!(plan.stage(), Stage::Planned);
+        assert_eq!(plan.pool_name(), "transparent");
+        assert!(plan.fee() > 0);
+        assert!(plan.change() > 0);
+        // min policy for a transparent tx: sender address + amounts revealed.
+        assert_eq!(plan.minimum_policy(), crate::policy::PrivacyPolicy::AllowFullyTransparent);
+        // describe() works without proving/signing.
+        assert!(plan.describe().contains("Funding pool"));
+
+        plan.prove().unwrap();
+        assert_eq!(plan.stage(), Stage::Proven);
+        plan.sign().unwrap();
+        assert_eq!(plan.stage(), Stage::Signed);
+        let tx = plan.extract().unwrap();
+        assert_eq!(plan.stage(), Stage::Extracted);
         assert!(!tx.bytes.is_empty());
         assert_ne!(tx.txid, [0u8; 32]);
+    }
+
+    #[test]
+    fn plan_does_not_sign() {
+        let f = funding();
+        let req = TxRequest::Call {
+            op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02],
+        };
+        let plan = f.plan(&req, &ctx()).unwrap();
+        // A planned (unsigned) plan has no signed transaction.
+        match &plan {
+            FundingPlan::Transparent(p) => assert!(p.signed.is_none()),
+            #[cfg(feature = "shielded")]
+            _ => unreachable!(),
+        }
     }
 
     #[test]
@@ -131,7 +157,7 @@ mod tests {
         let req = TxRequest::Prepare {
             carrier_values: vec![],
         };
-        assert!(f.fund(&req, &ctx()).is_err());
+        assert!(f.plan(&req, &ctx()).is_err());
     }
 
     #[test]
@@ -146,6 +172,6 @@ mod tests {
         let req = TxRequest::Call {
             op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02],
         };
-        assert!(f.fund(&req, &ctx()).is_err());
+        assert!(f.plan(&req, &ctx()).is_err());
     }
 }

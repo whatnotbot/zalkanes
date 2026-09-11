@@ -286,6 +286,7 @@ impl SigningKey {
 // ── Transparent transaction construction ─────────────────────────────────────
 
 /// How a transparent input is spent.
+#[derive(Clone)]
 pub enum SpendKind {
     /// Standard P2PKH spend (funding inputs for PREPARE/CALL).
     P2pkh { key: SigningKey },
@@ -299,6 +300,7 @@ pub enum SpendKind {
 }
 
 /// A single transparent input to spend.
+#[derive(Clone)]
 pub struct SpendInput {
     pub outpoint: OutPoint,
     pub value: u64,
@@ -310,12 +312,14 @@ pub struct SpendInput {
 }
 
 /// A single transparent output to create.
+#[derive(Clone)]
 pub struct SpendOutput {
     pub value: u64,
     pub script_pubkey: Vec<u8>,
 }
 
 /// A signed, serialized transparent transaction.
+#[derive(Clone)]
 pub struct SignedTx {
     pub bytes: Vec<u8>,
     pub txid: [u8; 32],
@@ -548,16 +552,33 @@ pub fn split_chunks(wasm: &[u8]) -> Result<Vec<Vec<u8>>> {
     Ok(chunks)
 }
 
-/// Build the PREPARE transaction: spend one or more funding UTXOs, create N
-/// P2SH carrier outputs, and return change to the funding address.
-pub fn build_prepare(
+/// An unsigned-but-fully-specified transparent transaction: the inputs, outputs,
+/// and fee/change arithmetic. Signing is a separate step so callers can inspect
+/// the plan (and surface fee/change/selected-value) before producing signatures.
+#[derive(Clone)]
+pub struct PreparedTx {
+    pub inputs: Vec<SpendInput>,
+    pub outputs: Vec<SpendOutput>,
+    pub fee: u64,
+    pub change: u64,
+    /// Sum of the input values (funding total for PREPARE/CALL, carrier total
+    /// for DEPLOY).
+    pub selected_value: u64,
+}
+
+/// Compute the PREPARE plan: spend one or more funding UTXOs, create N P2SH
+/// carrier outputs, and return change to the funding address. Produces no
+/// signatures.
+pub fn prepare_plan(
     funding_key: &SigningKey,
     funding_utxos: &[(OutPoint, u64)],
     carrier_values: &[u64],
-    branch_id: BranchId,
-) -> Result<SignedTx> {
+) -> Result<PreparedTx> {
     if funding_utxos.is_empty() {
         bail!("no funding UTXOs");
+    }
+    if carrier_values.is_empty() {
+        bail!("PREPARE requires at least one carrier output");
     }
     let pubkey = funding_key.compressed_pubkey();
     let redeem = redeem_script(&pubkey);
@@ -609,20 +630,37 @@ pub fn build_prepare(
         })
         .collect();
 
-    build_transparent_tx(&inputs, &outputs, 0, branch_id)
+    Ok(PreparedTx {
+        inputs,
+        outputs,
+        fee,
+        change,
+        selected_value: funding_total,
+    })
 }
 
-/// Build the DEPLOY transaction: spend N carrier UTXOs with WASM chunks in the
-/// scriptSigs, one OP_RETURN output carrying the Zalkanes DEPLOY message, and a
-/// change output returning the excess carrier value to the deployer.
-pub fn build_deploy(
+/// Build the PREPARE transaction: spend one or more funding UTXOs, create N
+/// P2SH carrier outputs, and return change to the funding address.
+pub fn build_prepare(
+    funding_key: &SigningKey,
+    funding_utxos: &[(OutPoint, u64)],
+    carrier_values: &[u64],
+    branch_id: BranchId,
+) -> Result<SignedTx> {
+    let p = prepare_plan(funding_key, funding_utxos, carrier_values)?;
+    build_transparent_tx(&p.inputs, &p.outputs, 0, branch_id)
+}
+
+/// Compute the DEPLOY plan: spend N carrier UTXOs with WASM chunks in the
+/// scriptSigs, one OP_RETURN output carrying the DEPLOY message, and change
+/// returning the excess carrier value. Produces no signatures.
+pub fn deploy_plan(
     key: &SigningKey,
     carrier_outpoints: &[OutPoint],
     carrier_values: &[u64],
     chunks: &[Vec<u8>],
     op_return: &[u8],
-    branch_id: BranchId,
-) -> Result<SignedTx> {
+) -> Result<PreparedTx> {
     if carrier_outpoints.len() != chunks.len() || carrier_outpoints.len() != carrier_values.len() {
         bail!("carrier outpoints/values/chunks length mismatch");
     }
@@ -677,18 +715,38 @@ pub fn build_deploy(
         });
     }
 
-    build_transparent_tx(&inputs, &outputs, 0, branch_id)
+    Ok(PreparedTx {
+        inputs,
+        outputs,
+        fee,
+        change,
+        selected_value: carrier_total,
+    })
 }
 
-/// Build a CALL transaction: spend one P2PKH funding UTXO, emit an OP_RETURN
-/// carrying the Zalkanes CALL message, and return change.
-pub fn build_call(
+/// Build the DEPLOY transaction: spend N carrier UTXOs with WASM chunks in the
+/// scriptSigs, one OP_RETURN output carrying the Zalkanes DEPLOY message, and a
+/// change output returning the excess carrier value to the deployer.
+pub fn build_deploy(
+    key: &SigningKey,
+    carrier_outpoints: &[OutPoint],
+    carrier_values: &[u64],
+    chunks: &[Vec<u8>],
+    op_return: &[u8],
+    branch_id: BranchId,
+) -> Result<SignedTx> {
+    let p = deploy_plan(key, carrier_outpoints, carrier_values, chunks, op_return)?;
+    build_transparent_tx(&p.inputs, &p.outputs, 0, branch_id)
+}
+
+/// Compute the CALL plan: spend one P2PKH funding UTXO, emit an OP_RETURN
+/// carrying the CALL message, and return change. Produces no signatures.
+pub fn call_plan(
     funding_key: &SigningKey,
     funding_outpoint: OutPoint,
     funding_value: u64,
     op_return: &[u8],
-    branch_id: BranchId,
-) -> Result<SignedTx> {
+) -> Result<PreparedTx> {
     let pubkey = funding_key.compressed_pubkey();
     let op_return = op_return_script(op_return);
     let in_size = input_serialized_size(p2pkh_script_sig_len());
@@ -700,8 +758,8 @@ pub fn build_call(
         .checked_sub(fee)
         .ok_or_else(|| anyhow::anyhow!("funding UTXO too small for CALL"))?;
 
-    build_transparent_tx(
-        &[SpendInput {
+    Ok(PreparedTx {
+        inputs: vec![SpendInput {
             outpoint: funding_outpoint,
             value: funding_value,
             script_pubkey: p2pkh_script_pubkey(&pubkey),
@@ -710,7 +768,7 @@ pub fn build_call(
                 key: funding_key.clone(),
             },
         }],
-        &[
+        outputs: vec![
             SpendOutput {
                 value: 0,
                 script_pubkey: op_return,
@@ -720,9 +778,23 @@ pub fn build_call(
                 script_pubkey: p2pkh_script_pubkey(&pubkey),
             },
         ],
-        0,
-        branch_id,
-    )
+        fee,
+        change,
+        selected_value: funding_value,
+    })
+}
+
+/// Build a CALL transaction: spend one P2PKH funding UTXO, emit an OP_RETURN
+/// carrying the Zalkanes CALL message, and return change.
+pub fn build_call(
+    funding_key: &SigningKey,
+    funding_outpoint: OutPoint,
+    funding_value: u64,
+    op_return: &[u8],
+    branch_id: BranchId,
+) -> Result<SignedTx> {
+    let p = call_plan(funding_key, funding_outpoint, funding_value, op_return)?;
+    build_transparent_tx(&p.inputs, &p.outputs, 0, branch_id)
 }
 
 #[cfg(test)]

@@ -1,19 +1,19 @@
 //! Funding-source abstraction.
 //!
 //! A [`FundingSource`] turns a funding-pool-agnostic [`TxRequest`] into a
-//! signed, serialized transaction. The ZALK payload (OP_RETURN message and P2SH
-//! carrier structure) is produced by the shared helpers in `zalkanes-tx`, so the
-//! two funding pools (`transparent` and `shielded`) cannot drift in what they
-//! commit on chain.
+//! [`FundingPlan`] — an inspected, not-yet-authorized description of the
+//! transaction. Authorization (proving, signing, extracting) is a separate
+//! layer, so callers can `--dry-run` inspect a plan without generating proofs
+//! or signatures.
 
 #![forbid(unsafe_code)]
 
 use anyhow::Result;
 use zalkanes_core::types::Network;
-use zalkanes_tx::{OutPoint, SignedTx};
+use zalkanes_tx::OutPoint;
 use zcash_protocol::consensus::BranchId;
 
-use crate::policy::PrivacyPolicy;
+use crate::plan::FundingPlan;
 
 /// A canonical, funding-pool-agnostic description of a Zalkanes transaction.
 ///
@@ -48,15 +48,38 @@ pub enum TxRequest {
     },
 }
 
+impl TxRequest {
+    /// Short human-readable kind name.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            TxRequest::Prepare { .. } => "prepare",
+            TxRequest::Deploy { .. } => "deploy",
+            TxRequest::Call { .. } => "call",
+        }
+    }
+
+    /// The encoded ZALK OP_RETURN payload (the bytes that go on chain inside the
+    /// OP_RETURN wrapper), if this request has one. PREPARE has none.
+    pub fn op_return_payload(&self) -> Option<&[u8]> {
+        match self {
+            TxRequest::Prepare { .. } => None,
+            TxRequest::Deploy { op_return, .. } | TxRequest::Call { op_return } => Some(op_return),
+        }
+    }
+
+    /// The first byte of the ZALK payload (the message type), if present.
+    pub fn opcode(&self) -> Option<u8> {
+        self.op_return_payload().and_then(|p| p.first().copied())
+    }
+}
+
 /// Per-transaction context shared by every funding source.
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct FundContext {
     /// Which network the transaction targets.
     pub network: Network,
     /// Target height, used to resolve the consensus branch id for signing.
     pub target_height: u32,
-    /// The privacy policy the caller has acknowledged.
-    pub policy: PrivacyPolicy,
 }
 
 impl FundContext {
@@ -73,18 +96,21 @@ pub struct FundingUtxo {
     pub value: u64,
 }
 
-/// A pool of funds that can pay for a Zalkanes transaction.
+/// A pool of funds that can plan a Zalkanes transaction.
 ///
-/// Implementations are responsible for selecting inputs, computing change, and
-/// signing — but the ZALK payload itself is fixed by [`TxRequest`].
+/// `plan` performs **no** proving and **no** signing: it only selects inputs,
+/// computes change/fee, and assembles the (inspectable) transaction shape. The
+/// returned [`FundingPlan`] is authorized separately.
 pub trait FundingSource {
     /// Human-readable pool name for logging and UX (`"transparent"` or
     /// `"shielded"`).
     fn pool_name(&self) -> &'static str;
 
-    /// Produce a signed, serialized transaction realizing `request`, funded
-    /// from this source.
-    fn fund(&self, request: &TxRequest, ctx: &FundContext) -> Result<SignedTx>;
+    /// Plan a transaction realizing `request`, funded from this source.
+    ///
+    /// Produces no proofs or signatures. Returns a [`FundingPlan`] that can be
+    /// inspected (`--dry-run`) and then authorized in stages.
+    fn plan(&self, request: &TxRequest, ctx: &FundContext) -> Result<FundingPlan>;
 }
 
 /// A `FundingSource` together with the pool-selection preference the user chose.
@@ -92,7 +118,8 @@ pub trait FundingSource {
 pub enum FundingPool {
     /// Spend transparent UTXOs only.
     Transparent,
-    /// Spend shielded (Orchard/Ironwood) notes only.
+    /// Spend shielded (Orchard/Ironwood) notes only, for the stages capable of
+    /// shielded funding (PREPARE and CALL).
     Shielded,
     /// Prefer shielded; fall back to transparent if shielded cannot cover.
     Auto,
@@ -137,5 +164,20 @@ mod tests {
             assert_eq!(p.as_str().parse::<FundingPool>().unwrap(), p);
         }
         assert!("bogus".parse::<FundingPool>().is_err());
+    }
+
+    #[test]
+    fn tx_request_opcode() {
+        let call = TxRequest::Call {
+            op_return: vec![0x02, 0x00],
+        };
+        assert_eq!(call.opcode(), Some(0x02));
+        assert_eq!(call.kind(), "call");
+
+        let prepare = TxRequest::Prepare {
+            carrier_values: vec![1],
+        };
+        assert_eq!(prepare.opcode(), None);
+        assert_eq!(prepare.kind(), "prepare");
     }
 }

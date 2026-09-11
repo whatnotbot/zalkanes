@@ -102,19 +102,28 @@ with the consensus pins).
 ### `FundingSource` abstraction
 
 `crates/zalkanes-wallet` introduces a single trait that both funding pools
-implement:
+implement, with **planning separated from authorization** so a caller can
+inspect (`--dry-run`) a plan before generating proofs or signatures:
 
 ```
 trait FundingSource {
     fn pool_name(&self) -> &'static str;         // "transparent" | "shielded"
-    fn fund(&self, request: &TxRequest, ctx: &FundContext) -> Result<SignedTx>;
+    fn plan(&self, request: &TxRequest, ctx: &FundContext) -> Result<FundingPlan>;
 }
+
+// Authorization is a separate, staged layer:
+//   FundingPlan::prove()  -> FundingPlan::sign()  -> FundingPlan::extract() -> SignedTx
 ```
 
 `TxRequest` is the *canonical* Zalkanes transaction description
 (`Prepare { carrier_values }`, `Deploy { chunks, carrier_outpoints,
 carrier_values, op_return }`, `Call { op_return }`) and is **funding-pool
-agnostic**. `SignedTx { bytes, txid }` is the serialized, signed transaction.
+agnostic**. A `FundingPlan` exposes the funding pool, selected value, fee,
+transparent outputs, shielded change, ZALK payload, the transaction-specific
+minimum privacy policy, target height, transaction version, and expiry height —
+all without proving or signing. `SignedTx { bytes, txid }` is the final
+serialized, signed transaction.
+
 The indexer-visible ZALK payload is produced by shared code paths
 (`zalkanes-tx`'s `op_return_script` / `redeem_script` / carrier scriptSig), so
 the two funding sources cannot drift in what they commit on chain.
@@ -167,14 +176,23 @@ ZALK message and carrier encoding are unaffected.
 
 ### Privacy policy
 
-Shielded funding reports a minimum privacy policy in Zallet's vocabulary
-(`FullPrivacy`, `AllowRevealedAmounts`, `AllowRevealedRecipients`,
-`AllowRevealedSenders`, `AllowFullyTransparent`, `AllowLinkingAccountAddresses`,
-`NoPrivacy`). Because every Zalkanes transaction publishes the ZALK message and
-carrier in cleartext, the minimum requirement is `AllowRevealedAmounts` (the
-carrier output values reveal amounts); the CLI displays this and requires
-acknowledgement before signing. We do **not** claim the contract execution is
-private.
+Shielded funding reports a **transaction-specific** minimum privacy policy in
+Zallet's vocabulary (`FullPrivacy`, `AllowRevealedAmounts`,
+`AllowRevealedRecipients`, `AllowRevealedSenders`, `AllowFullyTransparent`,
+`AllowLinkingAccountAddresses`, `NoPrivacy`), computed from what the transaction
+actually reveals about values and addresses:
+
+- shielded CALL (shielded spend + zero-value OP_RETURN + shielded change) →
+  `FullPrivacy` (no value/address is revealed);
+- shielded PREPARE (deshields value into transparent carrier outputs) →
+  `AllowRevealedAmounts`;
+- transparent or DEPLOY transactions → `AllowFullyTransparent`.
+
+This vocabulary is deliberately kept distinct from the Zalkanes disclosure that
+contract metadata (contract id / opcode / calldata / code) is always public on
+chain — that is not value/address privacy and is never folded into the Zallet
+policy. The CLI displays the computed minimum and requires acknowledgement
+before signing. We do **not** claim the contract execution is private.
 
 ## Non-goals
 

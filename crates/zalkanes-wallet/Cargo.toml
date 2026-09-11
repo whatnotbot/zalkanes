@@ -9,6 +9,7 @@ zalkanes-core     = { workspace = true }
 zalkanes-tx       = { workspace = true }
 anyhow            = { workspace = true }
 thiserror         = { workspace = true }
+hex               = { workspace = true }
 zcash_protocol    = { workspace = true }
 
 # Shielded funding (Orchard/Ironwood) via the lower-level PCZT pipeline.
@@ -17,6 +18,10 @@ zcash_primitives     = { workspace = true, optional = true }
 zcash_client_backend = { workspace = true, optional = true }
 zcash_client_sqlite  = { workspace = true, optional = true }
 zcash_proofs         = { workspace = true, optional = true }
+orchard              = { workspace = true, optional = true }
+zcash_transparent    = { workspace = true, optional = true }
+secp256k1            = { workspace = true, optional = true }
+rand_core            = { version = "=0.6.4", features = ["getrandom"], optional = true }
 
 [features]
 default = []
@@ -29,6 +34,11 @@ shielded = [
     "dep:zcash_client_backend",
     "dep:zcash_client_sqlite",
     "dep:zcash_proofs",
+    "dep:orchard",
+    "dep:zcash_transparent",
+    "dep:secp256k1",
+    "dep:rand_core",
+    "zcash_primitives?/circuits",
 ]
 
 [dev-dependencies]
