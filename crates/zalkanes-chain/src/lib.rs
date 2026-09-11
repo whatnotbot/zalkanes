@@ -122,12 +122,6 @@ impl RpcChainSource {
         self.rpc_call("getblockchaininfo", serde_json::json!([]))
     }
 
-    /// Broadcast a signed raw transaction (hex) to the mempool.
-    /// Returns the txid (hex).
-    pub fn send_raw_transaction(&self, raw_tx_hex: &str) -> Result<String> {
-        self.rpc_call("sendrawtransaction", serde_json::json!([raw_tx_hex]))
-    }
-
     /// Mine a block to `address` on regtest (Zebra internal miner uses the
     /// configured miner address; this is a convenience wrapper that returns the
     /// resulting block hash for `generatetoaddress`-style RPCs).

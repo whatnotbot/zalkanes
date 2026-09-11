@@ -19,6 +19,9 @@ zalkanes-state   = { workspace = true }
 zalkanes-protocol = { workspace = true }
 zalkanes-runtime = { workspace = true }
 zalkanes-carrier = { workspace = true }
+zalkanes-wallet  = { workspace = true, features = ["shielded"] }
+age              = { version = "=0.12.1", default-features = false }
+rpassword        = { version = "=7.3.1" }
 anyhow           = { workspace = true }
 tokio            = { workspace = true }
 clap             = { workspace = true }

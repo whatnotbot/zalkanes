@@ -51,6 +51,11 @@ impl ZcashRpc {
             .collect())
     }
 
+    /// NOT a production send path. Production broadcast goes through
+    /// `zalkanes_wallet::broadcast::broadcast_verified`, which accepts only a
+    /// `VerifiedTransaction` and journals the attempt. Retained for
+    /// regtest/diagnostic use by tooling that has no plan to verify against.
+    #[allow(dead_code)]
     pub fn send_raw_transaction(&self, hex: &str) -> Result<String> {
         let v = self.call("sendrawtransaction", serde_json::json!([hex]))?;
         Ok(v.as_str().unwrap_or("").to_string())
@@ -65,6 +70,7 @@ impl ZcashRpc {
     }
 
     /// The current chain tip height (via `getblockchaininfo.blocks`).
+    #[allow(dead_code)]
     pub fn tip_height(&self) -> Result<u32> {
         let v = self.call("getblockchaininfo", serde_json::json!([]))?;
         v["blocks"]
