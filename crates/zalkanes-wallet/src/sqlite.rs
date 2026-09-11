@@ -428,6 +428,15 @@ impl ShieldedWallet for SqliteShieldedWallet {
         // always exists once the wallet is fully scanned to `tip`.
         let anchor_height = BlockHeight::from_u32(zebra_tip - 1);
 
+        // 2 confirmations, aligned with the `tip - 1` anchor: a note mined at
+        // height H becomes selectable at target >= H + 2, exactly when the
+        // anchor treestate (tip - 1 >= H) can witness it. With 1 confirmation
+        // a note mined in the tip block would be selected but not witnessable.
+        let confirmations = ConfirmationsPolicy::new_symmetrical(
+            std::num::NonZeroU32::new(2).expect("nonzero"),
+            true,
+        );
+
         let mut db = self.db.borrow_mut();
         let notes = db
             .select_spendable_notes(
@@ -435,7 +444,7 @@ impl ShieldedWallet for SqliteShieldedWallet {
                 TargetValue::AtLeast(zcash_protocol::value::Zatoshis::from_u64(required_zat)?),
                 &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
                 TargetHeight::from(target_height),
-                ConfirmationsPolicy::MIN,
+                confirmations,
                 &[],
                 LockFilter::Policy(&LockedInputPolicy::Exclude),
             )
