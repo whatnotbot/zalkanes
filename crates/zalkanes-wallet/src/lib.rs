@@ -29,9 +29,9 @@
 pub mod funding;
 pub mod plan;
 pub mod policy;
-pub mod transparent;
 #[cfg(feature = "shielded")]
 pub mod shielded;
+pub mod transparent;
 
 pub use funding::{FundContext, FundingPool, FundingSource, FundingUtxo, TxRequest};
 pub use plan::{FundingPlan, Stage, TransparentPlan};

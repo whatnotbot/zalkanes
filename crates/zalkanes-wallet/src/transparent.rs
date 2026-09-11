@@ -107,7 +107,13 @@ mod tests {
         let mut txid = [0u8; 32];
         txid[0] = 1;
         let outpoint = OutPoint::new(txid, 0);
-        TransparentFunding::new(key, vec![FundingUtxo { outpoint, value: 1_000_000 }])
+        TransparentFunding::new(
+            key,
+            vec![FundingUtxo {
+                outpoint,
+                value: 1_000_000,
+            }],
+        )
     }
 
     #[test]
@@ -122,7 +128,10 @@ mod tests {
         assert!(plan.fee() > 0);
         assert!(plan.change() > 0);
         // min policy for a transparent tx: sender address + amounts revealed.
-        assert_eq!(plan.minimum_policy(), crate::policy::PrivacyPolicy::AllowFullyTransparent);
+        assert_eq!(
+            plan.minimum_policy(),
+            crate::policy::PrivacyPolicy::AllowFullyTransparent
+        );
         // describe() works without proving/signing.
         assert!(plan.describe().contains("Funding pool"));
 

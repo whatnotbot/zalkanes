@@ -93,7 +93,10 @@ pub struct ShieldedFunding {
 }
 
 impl ShieldedFunding {
-    pub fn new(wallet: Box<dyn ShieldedWallet>, carrier_key: Option<zalkanes_tx::SigningKey>) -> Self {
+    pub fn new(
+        wallet: Box<dyn ShieldedWallet>,
+        carrier_key: Option<zalkanes_tx::SigningKey>,
+    ) -> Self {
         Self {
             wallet,
             carrier_key,
@@ -110,10 +113,9 @@ impl FundingSource for ShieldedFunding {
         match request {
             TxRequest::Call { op_return } => self.plan_call(op_return, ctx),
             TxRequest::Prepare { carrier_values } => {
-                let carrier_key = self
-                    .carrier_key
-                    .as_ref()
-                    .ok_or_else(|| anyhow!("shielded PREPARE requires a transparent carrier key"))?;
+                let carrier_key = self.carrier_key.as_ref().ok_or_else(|| {
+                    anyhow!("shielded PREPARE requires a transparent carrier key")
+                })?;
                 self.plan_prepare(carrier_key, carrier_values, ctx)
             }
             TxRequest::Deploy { .. } => bail!(
@@ -132,14 +134,21 @@ impl ShieldedFunding {
 
         // Deterministic, bounded fee/change selection loop: transparent output
         // value is zero for CALL, so `selected = fee + change`.
-        let (sel, fee) = select_for(&*self.wallet, &params, target_height, branch_id, &[], op_return, 0)?;
+        let (sel, fee) = select_for(
+            &*self.wallet,
+            &params,
+            target_height,
+            branch_id,
+            &[],
+            op_return,
+            0,
+        )?;
         let change = sel.selected_value - fee;
 
         let (pczt, orchard_meta, ironwood_meta, tx_version, expiry_height) =
             assemble_and_build(&params, target_height, &sel, &[], op_return, change)?;
 
-        let (orchard_sign, ironwood_sign) =
-            signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
+        let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
 
         Ok(crate::plan::FundingPlan::Shielded(Box::new(ShieldedPlan {
             stage: Stage::Planned,
@@ -178,10 +187,8 @@ impl ShieldedFunding {
         let carrier_hash = zcash_transparent::util::hash160::hash(&redeem);
         let carrier_addr = TransparentAddress::ScriptHash(carrier_hash);
 
-        let carriers: Vec<(TransparentAddress, u64)> = carrier_values
-            .iter()
-            .map(|v| (carrier_addr, *v))
-            .collect();
+        let carriers: Vec<(TransparentAddress, u64)> =
+            carrier_values.iter().map(|v| (carrier_addr, *v)).collect();
         let carrier_total: u64 = carrier_values.iter().sum();
 
         let (sel, fee) = select_for(
@@ -202,8 +209,7 @@ impl ShieldedFunding {
         let (pczt, orchard_meta, ironwood_meta, tx_version, expiry_height) =
             assemble_and_build(&params, target_height, &sel, &carriers, &[], change)?;
 
-        let (orchard_sign, ironwood_sign) =
-            signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
+        let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
 
         Ok(crate::plan::FundingPlan::Shielded(Box::new(ShieldedPlan {
             stage: Stage::Planned,
@@ -264,7 +270,11 @@ impl ShieldedPlan {
             Some(p) => hex::encode(p),
             None => match &self.request {
                 TxRequest::Prepare { carrier_values } => {
-                    format!("carrier outputs x{} ({} zat total)", carrier_values.len(), carrier_values.iter().sum::<u64>())
+                    format!(
+                        "carrier outputs x{} ({} zat total)",
+                        carrier_values.len(),
+                        carrier_values.iter().sum::<u64>()
+                    )
                 }
                 _ => "n/a".to_string(),
             },
@@ -273,7 +283,11 @@ impl ShieldedPlan {
 
     pub fn describe_lines(&self) -> Vec<String> {
         vec![
-            format!("Shielded spends:    {} note(s), {} zat", self.orchard_sign.len() + self.ironwood_sign.len(), self.selected_value),
+            format!(
+                "Shielded spends:    {} note(s), {} zat",
+                self.orchard_sign.len() + self.ironwood_sign.len(),
+                self.selected_value
+            ),
             format!("Shielded change:    {} zat", self.change),
         ]
     }
@@ -295,15 +309,21 @@ impl ShieldedPlan {
             .pczt
             .take()
             .ok_or_else(|| anyhow!("shielded plan has no PCZT"))?;
-        let pk = zcash_primitives::transaction::builder::cached_orchard_proving_key(self.circuit_version);
+        let pk = zcash_primitives::transaction::builder::cached_orchard_proving_key(
+            self.circuit_version,
+        );
         let prover = pczt::roles::prover::Prover::new(pczt);
         let prover = if prover.requires_orchard_proof() {
-            prover.create_orchard_proof(pk).map_err(|e| anyhow!("orchard prove: {e:?}"))?
+            prover
+                .create_orchard_proof(pk)
+                .map_err(|e| anyhow!("orchard prove: {e:?}"))?
         } else {
             prover
         };
         let prover = if prover.requires_ironwood_proof() {
-            prover.create_ironwood_proof(pk).map_err(|e| anyhow!("ironwood prove: {e:?}"))?
+            prover
+                .create_ironwood_proof(pk)
+                .map_err(|e| anyhow!("ironwood prove: {e:?}"))?
         } else {
             prover
         };
@@ -318,12 +338,17 @@ impl ShieldedPlan {
             .pczt
             .take()
             .ok_or_else(|| anyhow!("shielded plan has no PCZT"))?;
-        let mut signer = pczt::roles::signer::Signer::new(pczt).map_err(|e| anyhow!("signer init: {e:?}"))?;
+        let mut signer =
+            pczt::roles::signer::Signer::new(pczt).map_err(|e| anyhow!("signer init: {e:?}"))?;
         for (index, ask) in &self.orchard_sign {
-            signer.sign_orchard(*index, ask).map_err(|e| anyhow!("orchard sign {index}: {e:?}"))?;
+            signer
+                .sign_orchard(*index, ask)
+                .map_err(|e| anyhow!("orchard sign {index}: {e:?}"))?;
         }
         for (index, ask) in &self.ironwood_sign {
-            signer.sign_ironwood(*index, ask).map_err(|e| anyhow!("ironwood sign {index}: {e:?}"))?;
+            signer
+                .sign_ironwood(*index, ask)
+                .map_err(|e| anyhow!("ironwood sign {index}: {e:?}"))?;
         }
         self.pczt = Some(signer.finish());
         self.stage = Stage::Signed;
@@ -340,7 +365,8 @@ impl ShieldedPlan {
             .extract()
             .map_err(|e| anyhow!("tx extract: {e:?}"))?;
         let mut bytes = Vec::new();
-        tx.write(&mut bytes).map_err(|e| anyhow!("tx serialize: {e:?}"))?;
+        tx.write(&mut bytes)
+            .map_err(|e| anyhow!("tx serialize: {e:?}"))?;
         let mut txid = [0u8; 32];
         txid.copy_from_slice(tx.txid().as_ref());
         self.signed = Some(SignedTx { bytes, txid });
@@ -371,8 +397,20 @@ fn select_for(
         // Measure the exact fee with one change output present (fee depends only
         // on action counts/sizes, never on values).
         let fee = {
-            let builder = assemble_builder(params, target_height, branch_id, &sel, carriers, op_return, 1)?;
-            u64::from(builder.get_fee(&fee_rule).map_err(|e| anyhow!("fee: {e:?}"))?)
+            let builder = assemble_builder(
+                params,
+                target_height,
+                branch_id,
+                &sel,
+                carriers,
+                op_return,
+                1,
+            )?;
+            u64::from(
+                builder
+                    .get_fee(&fee_rule)
+                    .map_err(|e| anyhow!("fee: {e:?}"))?,
+            )
         };
         let total_needed = required_value
             .checked_add(fee)
@@ -468,9 +506,23 @@ fn assemble_and_build(
     carriers: &[(TransparentAddress, u64)],
     op_return: &[u8],
     change: u64,
-) -> Result<(pczt::Pczt, BundleMetadata, BundleMetadata, &'static str, u32)> {
+) -> Result<(
+    pczt::Pczt,
+    BundleMetadata,
+    BundleMetadata,
+    &'static str,
+    u32,
+)> {
     let branch_id = BranchId::for_height(params, target_height);
-    let builder = assemble_builder(params, target_height, branch_id, sel, carriers, op_return, change)?;
+    let builder = assemble_builder(
+        params,
+        target_height,
+        branch_id,
+        sel,
+        carriers,
+        op_return,
+        change,
+    )?;
     let build_result = builder
         .build_for_pczt(OsRng, &FeeRule::standard())
         .map_err(|e| anyhow!("build_for_pczt: {e:?}"))?;
@@ -503,7 +555,10 @@ fn signing_plans(
     sel: &ShieldedSelection,
     orchard_meta: &BundleMetadata,
     ironwood_meta: &BundleMetadata,
-) -> Result<(Vec<(usize, SpendAuthorizingKey)>, Vec<(usize, SpendAuthorizingKey)>)> {
+) -> Result<(
+    Vec<(usize, SpendAuthorizingKey)>,
+    Vec<(usize, SpendAuthorizingKey)>,
+)> {
     let mut orchard = Vec::new();
     let mut ironwood = Vec::new();
     let mut o = 0usize;

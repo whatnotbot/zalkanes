@@ -255,10 +255,7 @@ impl TransparentPlan {
             } else {
                 "transparent"
             };
-            lines.push(format!(
-                "  output[{i}]: {kind}, {} zat",
-                out.value
-            ));
+            lines.push(format!("  output[{i}]: {kind}, {} zat", out.value));
         }
         lines
     }

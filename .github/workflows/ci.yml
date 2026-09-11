@@ -38,6 +38,21 @@ jobs:
       - name: cargo test (release)
         run: cargo test --release --workspace
 
+  shielded-wallet:
+    name: shielded wallet (clippy + test)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo clippy (shielded)
+        run: cargo clippy -p zalkanes-wallet --features shielded --all-targets -- -D warnings
+      - name: cargo test (shielded)
+        run: cargo test -p zalkanes-wallet --features shielded
+
   contracts:
     name: contract builds (wasm32)
     runs-on: ubuntu-latest
@@ -63,7 +78,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       # Pin to v2 (cargo-deny 0.20.2); deny.toml uses the 0.20.x schema.
+      # cargo-deny 0.20.2 reads Cargo.lock directly (which already contains the
+      # full dependency union, including the `shielded`-feature crates), so no
+      # feature flag is needed -- and `--all-features` is not a valid
+      # `check` argument in this version.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check
-          arguments: "--all-features"
