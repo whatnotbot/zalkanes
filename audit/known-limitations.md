@@ -22,19 +22,26 @@ should confirm whether any of these change the security conclusion.
 
 ## Fuzzing
 
-- `cargo-fuzz` targets are declared in the milestone plan but a long-running
-  fuzz campaign has **not yet been executed**. See `fuzz-summary.md`.
+- Executed 2026-09-12 with two findings, both fixed with regression seeds
+  and unit regressions; zero unresolved. See `fuzz-summary.md` and
+  `fuzz/README.md`. Continuous (long-horizon) fuzzing remains future work.
 
 ## Cross-platform determinism
 
-- Determinism on Linux x86_64 (debug + release) is covered by CI. ARM64
-  determinism is **not yet verified** in CI. See `test-summary.md`.
+- Green in four local configurations: aarch64 debug/release (native Apple
+  Silicon) and x86_64 debug/release (Rosetta 2 emulation, labeled as
+  such); CI covers native Linux x86_64 debug/release on every push.
+  Native ARM64-Linux and non-emulated x86_64-macOS runs remain open.
 
 ## Stress run
 
-- A 100-deploy / 10,000-call public-testnet stress run is **not yet executed**.
-  The functional deploy/call/restart/reindex acceptance evidence is in
-  `testnet-evidence.md`.
+- The 100-deploy / 10,000-successful-call / 1,000-intentional-failure
+  target was executed in-process through the REAL block processor with two
+  isolated state databases and per-block root equality
+  (`crates/zalkanes-testkit/tests/two_node_stress.rs`), and the live
+  two-STACK form resynced the full public-testnet chain on an independent
+  node with byte-identical roots (`live-acceptance-evidence.md`). An
+  on-chain public-testnet stress at those counts remains future work.
 
 ## Mainnet
 

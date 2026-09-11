@@ -2,8 +2,22 @@
 
 ## Status
 
-**Not yet executed.** `cargo-fuzz` targets are planned but no long-running fuzz
-campaign has been run at the audited commit.
+**Executed** (2026-09-12, aarch64-darwin, libFuzzer via cargo-fuzz on
+nightly). Five committed targets under `fuzz/`, 412M+ total executions in
+the initial bounded campaign (360 s/target) plus post-fix re-runs
+(120 s/target). **Two findings, both fixed** with regression seeds
+committed under `fuzz/seeds/` and unit regressions in the affected crates:
+
+1. State rollback round-trip violations (re-deploy-then-rollback deleted
+   the replaced contract; zero-length storage keys collided with the
+   legacy deploy-undo sentinel) — fixed with a versioned `Deploy` undo
+   variant carrying the replaced contract.
+2. Pinned wasmi 2.0.0 translator panic on a malformed module (node-halt
+   class) — contained into a deterministic rejection in
+   `validate_module`/`execute`; release builds reject the same input with
+   a clean parse error (identical consensus outcome).
+
+Zero unresolved findings. Full per-target statistics: `fuzz/README.md`.
 
 ## Planned targets
 

@@ -27,11 +27,31 @@ builds`, `cargo-deny` — all must be green. See `.github/workflows/ci.yml`.
   - Regtest (Nu6.3, reconfigured): carrier relay accepted + reconstructed
     (PREPARE `d0c95255…`, DEPLOY `51b20b8c…`, 1400-byte chunk round-trip).
 
+## Completed since the freeze (2026-09-12 hardening phase)
+
+- `cargo-fuzz` campaign: executed, 412M+ executions, two findings fixed,
+  zero unresolved (`fuzz-summary.md`, `fuzz/README.md`).
+- Cross-arch determinism: aarch64 debug/release native + x86_64
+  debug/release under Rosetta 2 (labeled emulation), plus CI's native
+  Linux x86_64 — all green including the 101 committed execution vectors.
+- Two-node root agreement: independent local node resynced the full
+  public-testnet chain and reproduced the Railway node's root
+  byte-for-byte at height 4,339,534 (`live-acceptance-evidence.md`).
+- 100-deploy / 10,000-call / 1,000-failure stress: in-process through the
+  real block processor with per-block root equality across two isolated
+  DBs (`two_node_stress.rs`).
+- State-DB crash/corruption suite: SIGKILL during commit/reindex,
+  interrupted rollback, read-only refusal, truncated CURRENT, corrupted
+  MANIFEST (`crates/zalkanes-state/tests/crash.rs`).
+- WASM adversarial suite + frozen-profile enforcement
+  (`crates/zalkanes-runtime/tests/adversarial_wasm.rs`).
+- Wallet reorg matrix incl. same-height/shorter-branch detection fix
+  (`crates/zalkanes-wallet/src/wallet_reorg_tests.rs`).
+
 ## Not yet run (release-blocking)
 
-- `cargo-fuzz` campaign (see `fuzz-summary.md`).
-- ARM64 determinism matrix.
-- Two-node root-agreement soak.
-- 100-deploy / 10,000-call stress run.
-- Activation-boundary reorg test.
-- State-DB corruption (kill -9 / disk-full / corrupt journal) tests.
+- Activation-boundary reorg test (live regtest environment required).
+- Real disk-full behavior (no loop-device support in the dev environment).
+- Native ARM64-Linux / non-emulated x86_64-macOS determinism runs.
+- Live regtest note-level reorg evidence (removed-branch note/spend).
+- External security audit.

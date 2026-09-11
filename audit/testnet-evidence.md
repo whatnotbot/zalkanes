@@ -14,3 +14,12 @@ experimental):
 > Note: Milestone 3 migrates to V5/ZIP-244 and freezes the wire format. The
 > existing testnet deployment is **pre-freeze experimental**. A fresh frozen-RC
 > testnet deployment is required before the milestone is complete.
+
+## Update 2026-09-12: frozen-RC live acceptance supersedes the V4-era caveat
+
+The full shielded-wallet live acceptance ran against the FROZEN protocol
+(V5/ZIP-244 era manifest `57178628…`, verified live): shielded CALLs on the
+original counter (2→3→4), byte-equality of transparent vs shielded ZALK
+payloads, a fresh shielded-funded PREPARE → transparent DEPLOY (contract
+`0af32d54…`, 0→1→2), and independent two-node root equality at height
+4,339,534. Complete records: `live-acceptance-evidence.md`.
