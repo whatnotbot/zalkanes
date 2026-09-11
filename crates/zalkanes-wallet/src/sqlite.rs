@@ -588,13 +588,15 @@ mod tests {
     struct MockChainSource {
         tip: u32,
     }
-    impl crate::chain_source::CanonicalChainSource for MockChainSource {
+    impl crate::funding::TipSource for MockChainSource {
         fn canonical_tip(&self) -> Result<crate::funding::CanonicalTip> {
             Ok(crate::funding::CanonicalTip {
                 height: self.tip,
                 hash: [0u8; 32],
             })
         }
+    }
+    impl crate::chain_source::CanonicalChainSource for MockChainSource {
         fn block_hash(&self, _h: u32) -> Result<[u8; 32]> {
             Ok([0u8; 32])
         }

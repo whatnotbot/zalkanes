@@ -338,9 +338,9 @@ impl FundingPlan {
         }
     }
 
-    /// Reject the plan if the canonical chain identity has changed. Call before
-    /// prove/sign/extract/broadcast; a change means the plan must be re-made.
-    pub fn check_freshness(&self, current: CanonicalTip) -> Result<()> {
+    /// Reject the plan if the canonical chain identity has changed. Internal:
+    /// callers pass the tip obtained from a trusted [`TipSource`].
+    pub(crate) fn check_freshness(&self, current: CanonicalTip) -> Result<()> {
         let planned = self.canonical_tip();
         if planned != current {
             bail!(
@@ -356,18 +356,17 @@ impl FundingPlan {
 
     // ── Authorization stages ───────────────────────────────────────────────
     //
-    // Every stage takes the current canonical tip and enforces freshness
-    // internally, so a broadcast-capable caller cannot bypass the gate: a plan
-    // made against a different chain identity is rejected before any proof,
-    // signature, or extraction work happens.
+    // Every public stage takes a trusted `TipSource` (our Zebra), queries the
+    // canonical tip itself, and enforces freshness internally. A caller cannot
+    // manufacture a CanonicalTip to authorize a stale plan.
 
     /// Produce any zero-knowledge proofs required by this transaction.
     ///
     /// A no-op for transparent plans. For shielded plans this runs the PCZT
-    /// Prover role. Rejects the plan if `current_tip` no longer matches the
+    /// Prover role. Rejects the plan if the canonical tip no longer matches the
     /// chain identity the plan was pinned to.
-    pub fn prove(&mut self, current_tip: CanonicalTip) -> Result<()> {
-        self.check_freshness(current_tip)?;
+    pub fn prove(&mut self, tip_source: &dyn crate::funding::TipSource) -> Result<()> {
+        self.check_freshness(tip_source.canonical_tip()?)?;
         match self {
             FundingPlan::Transparent(p) => p.prove(),
             #[cfg(feature = "shielded")]
@@ -376,9 +375,9 @@ impl FundingPlan {
     }
 
     /// Apply authorizing signatures (transparent and/or shielded), after
-    /// re-verifying the canonical tip.
-    pub fn sign(&mut self, current_tip: CanonicalTip) -> Result<()> {
-        self.check_freshness(current_tip)?;
+    /// re-querying the canonical tip.
+    pub fn sign(&mut self, tip_source: &dyn crate::funding::TipSource) -> Result<()> {
+        self.check_freshness(tip_source.canonical_tip()?)?;
         match self {
             FundingPlan::Transparent(p) => p.sign(),
             #[cfg(feature = "shielded")]
@@ -386,10 +385,10 @@ impl FundingPlan {
         }
     }
 
-    /// Extract the final, network-ready serialized transaction, after
-    /// re-verifying the canonical tip.
-    pub fn extract(&mut self, current_tip: CanonicalTip) -> Result<SignedTx> {
-        self.check_freshness(current_tip)?;
+    /// Extract the final, network-ready serialized transaction, after re-querying
+    /// the canonical tip.
+    pub fn extract(&mut self, tip_source: &dyn crate::funding::TipSource) -> Result<SignedTx> {
+        self.check_freshness(tip_source.canonical_tip()?)?;
         match self {
             FundingPlan::Transparent(p) => p.extract(),
             #[cfg(feature = "shielded")]
@@ -399,13 +398,19 @@ impl FundingPlan {
 
     /// Extract and structurally verify the final transaction against this plan.
     /// Returns a [`VerifiedTransaction`], the only type broadcast APIs accept.
-    pub fn extract_verified(&mut self, current_tip: CanonicalTip) -> Result<VerifiedTransaction> {
-        let tx = self.extract(current_tip)?;
+    pub fn extract_verified(
+        &mut self,
+        tip_source: &dyn crate::funding::TipSource,
+    ) -> Result<VerifiedTransaction> {
+        let tip = tip_source.canonical_tip()?;
+        self.check_freshness(tip)?;
+        let tx = self.extract(tip_source)?;
         self.verify_extracted(&tx)?;
         Ok(VerifiedTransaction {
             signed: tx,
             plan_id: self.plan_id().to_string(),
             intent_hash: self.intent_hash().to_string(),
+            verified_tip: tip,
         })
     }
 
@@ -421,11 +426,41 @@ impl FundingPlan {
 }
 
 /// A transaction that has been structurally verified against its [`FundingPlan`].
-/// Broadcast-capable APIs accept only this type — never a raw transaction.
+/// Broadcast-capable APIs accept only this type — never a raw transaction. All
+/// fields are private and there is no public constructor: only the authoritative
+/// [`FundingPlan::extract_verified`] path can produce one.
 pub struct VerifiedTransaction {
-    pub signed: SignedTx,
-    pub plan_id: String,
-    pub intent_hash: String,
+    signed: SignedTx,
+    plan_id: String,
+    intent_hash: String,
+    verified_tip: CanonicalTip,
+}
+
+impl VerifiedTransaction {
+    /// The transaction id (internal byte order).
+    pub fn txid(&self) -> [u8; 32] {
+        self.signed.txid
+    }
+
+    /// The serialized transaction bytes.
+    pub fn bytes(&self) -> &[u8] {
+        &self.signed.bytes
+    }
+
+    /// The plan id this transaction was verified against.
+    pub fn plan_id(&self) -> &str {
+        &self.plan_id
+    }
+
+    /// The plan intent hash this transaction was verified against.
+    pub fn intent_hash(&self) -> &str {
+        &self.intent_hash
+    }
+
+    /// The canonical tip the transaction was verified at.
+    pub fn verified_tip(&self) -> CanonicalTip {
+        self.verified_tip
+    }
 }
 
 /// The separate Zalkanes disclosure, distinct from Zallet's privacy-policy

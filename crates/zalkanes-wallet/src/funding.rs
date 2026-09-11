@@ -81,6 +81,13 @@ pub struct CanonicalTip {
     pub hash: [u8; 32],
 }
 
+/// A source of the authoritative canonical tip. Public authorization stages
+/// take this (never a caller-manufactured [`CanonicalTip`]), so freshness is
+/// always queried from the trusted chain source.
+pub trait TipSource {
+    fn canonical_tip(&self) -> Result<CanonicalTip>;
+}
+
 /// Per-transaction context shared by every funding source.
 #[derive(Clone, Copy, Debug)]
 pub struct FundContext {

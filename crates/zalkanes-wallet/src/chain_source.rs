@@ -16,9 +16,7 @@ use zcash_protocol::consensus::Network;
 use crate::funding::CanonicalTip;
 
 /// A source of canonical chain data, backed by our own Zebra.
-pub trait CanonicalChainSource {
-    /// The current canonical tip (height + block hash).
-    fn canonical_tip(&self) -> Result<CanonicalTip>;
+pub trait CanonicalChainSource: crate::funding::TipSource {
     /// The internal block hash at `height`.
     fn block_hash(&self, height: u32) -> Result<[u8; 32]>;
     /// The full Zcash block at `height`.
@@ -133,7 +131,7 @@ fn display_hex_to_internal(hex_str: &str) -> Result<[u8; 32]> {
     Ok(out)
 }
 
-impl CanonicalChainSource for ZebraCanonicalChainSource {
+impl crate::funding::TipSource for ZebraCanonicalChainSource {
     fn canonical_tip(&self) -> Result<CanonicalTip> {
         let info: BlockchainInfo = self.rpc("getblockchaininfo", serde_json::json!([]))?;
         Ok(CanonicalTip {
@@ -141,7 +139,9 @@ impl CanonicalChainSource for ZebraCanonicalChainSource {
             hash: display_hex_to_internal(&info.best_block_hash)?,
         })
     }
+}
 
+impl CanonicalChainSource for ZebraCanonicalChainSource {
     fn block_hash(&self, height: u32) -> Result<[u8; 32]> {
         let h: String = self.rpc("getblockhash", serde_json::json!([height]))?;
         display_hex_to_internal(&h)

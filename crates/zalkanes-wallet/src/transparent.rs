@@ -156,6 +156,17 @@ mod tests {
         FundContext::new(Network::Regtest, tip())
     }
 
+    struct MockTipSource(crate::funding::CanonicalTip);
+    impl crate::funding::TipSource for MockTipSource {
+        fn canonical_tip(&self) -> anyhow::Result<crate::funding::CanonicalTip> {
+            Ok(self.0)
+        }
+    }
+
+    fn tip_source() -> MockTipSource {
+        MockTipSource(tip())
+    }
+
     fn funding() -> TransparentFunding {
         let key = SigningKey::dev_key();
         let mut txid = [0u8; 32];
@@ -189,11 +200,11 @@ mod tests {
         // describe() works without proving/signing.
         assert!(plan.describe().contains("Funding pool"));
 
-        plan.prove(tip()).unwrap();
+        plan.prove(&tip_source()).unwrap();
         assert_eq!(plan.stage(), Stage::Proven);
-        plan.sign(tip()).unwrap();
+        plan.sign(&tip_source()).unwrap();
         assert_eq!(plan.stage(), Stage::Signed);
-        let tx = plan.extract(tip()).unwrap();
+        let tx = plan.extract(&tip_source()).unwrap();
         assert_eq!(plan.stage(), Stage::Extracted);
         assert!(!tx.bytes.is_empty());
         assert_ne!(tx.txid, [0u8; 32]);
@@ -236,6 +247,23 @@ mod tests {
                 hash: [0xAAu8; 32],
             })
             .is_err());
+    }
+
+    #[test]
+    fn stale_plan_rejected_via_tip_source() {
+        let f = funding();
+        let req = TxRequest::Call {
+            op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02],
+        };
+        let mut plan = f.plan(&req, &ctx()).unwrap();
+        // The chain moved: the authoritative source now reports a different tip.
+        let stale = MockTipSource(crate::funding::CanonicalTip {
+            height: 1,
+            hash: [0xAAu8; 32],
+        });
+        assert!(plan.prove(&stale).is_err(), "stale plan must be rejected");
+        assert!(plan.sign(&stale).is_err());
+        assert!(plan.extract(&stale).is_err());
     }
 
     #[test]
@@ -307,16 +335,16 @@ mod tests {
         };
 
         let mut a = plan_a();
-        a.prove(tip()).unwrap();
-        a.sign(tip()).unwrap();
-        let tx_a = a.extract(tip()).unwrap();
+        a.prove(&tip_source()).unwrap();
+        a.sign(&tip_source()).unwrap();
+        let tx_a = a.extract(&tip_source()).unwrap();
         // Positive: the correct plan verifies against its own extracted tx.
         a.verify_extracted(&tx_a).unwrap();
 
         let mut b = plan_b();
-        b.prove(tip()).unwrap();
-        b.sign(tip()).unwrap();
-        let tx_b = b.extract(tip()).unwrap();
+        b.prove(&tip_source()).unwrap();
+        b.sign(&tip_source()).unwrap();
+        let tx_b = b.extract(&tip_source()).unwrap();
 
         // Negative: a transaction with a different ZALK payload is rejected.
         assert!(a.verify_extracted(&tx_b).is_err());
