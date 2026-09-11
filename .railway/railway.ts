@@ -23,6 +23,7 @@ export default defineRailway(() => {
   });
 
   const zebra = service("zebra", {
+    source: github("whatnotbot/zalkanes", { branch: "main" }),
     build: {
       builder: "DOCKERFILE",
       dockerfilePath: "deploy/zebra/Dockerfile",
