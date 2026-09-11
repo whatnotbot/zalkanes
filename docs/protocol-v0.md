@@ -1,6 +1,7 @@
 # Protocol v0
 
-> **Status: DRAFT — do not freeze until Phase 0B carrier spike passes.**
+> **Status: FROZEN-RC — protocol-v0 wire format frozen for the v0.1.0-rc1
+> release candidate. Any change requires a new protocol version + ADR + vectors.**
 
 This document specifies the exact binary wire format for all Zalkanes v0
 protocol messages.  Every parser MUST implement this spec byte-for-byte.

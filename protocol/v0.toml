@@ -9,7 +9,7 @@
 
 [protocol]
 version = 0
-status = "DRAFT"
+status = "FROZEN-RC"
 magic = [0x5A, 0x41, 0x4C, 0x4B] # "ZALK"
 
 [message]

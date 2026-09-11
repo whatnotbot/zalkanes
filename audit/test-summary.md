@@ -20,7 +20,12 @@ builds`, `cargo-deny` — all must be green. See `.github/workflows/ci.yml`.
 ## Live-chain evidence
 
 - Regtest (Milestone 1): counter deploy + 2 calls + `get()==2`, accepted.
-- Public testnet (Milestone 2): full evidence in `docs/release/testnet-activation.md`.
+- Public testnet (Milestone 2, V4-era): full evidence in `docs/release/testnet-activation.md`.
+- **V5/ZIP-244 (Milestone 3 freeze):**
+  - Public testnet (Nu6.3): V5 deploy `6a49cc08…` (version 5, vgid `26a7270a`),
+    calls `2a95a672…` / `499306be…`, `get()==2`, contract `4e70415c…`.
+  - Regtest (Nu6.3, reconfigured): carrier relay accepted + reconstructed
+    (PREPARE `d0c95255…`, DEPLOY `51b20b8c…`, 1400-byte chunk round-trip).
 
 ## Not yet run (release-blocking)
 

@@ -7,9 +7,8 @@ evidence.
 
 ## Commit under audit
 
-- **Git commit:** `e022bac4add584a956f7e437d0e9fa821c6a190e`
-- **Protocol manifest hash:** `PROTOCOL_V0_MANIFEST_HASH` (SHA-256 over
-  `protocol/v0.toml`); see `zalkanes_getInfo.protocol_manifest_hash`.
+- **Git commit:** *(see tag `zalkanes-v0.1.0-rc1`)*
+- **Protocol manifest hash:** `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752` (SHA-256 over `protocol/v0.toml`); see `zalkanes_getInfo.protocol_manifest_hash`.
 
 > The manifest hash above is the hash of the manifest at the audited commit.
 > Any change to a consensus constant changes it.
@@ -32,5 +31,7 @@ evidence.
 
 ## Status
 
-Protocol v0 is **DRAFT** (pre-freeze). This package tracks the freeze process;
-it will be marked **FROZEN-RC** when the release candidate is tagged.
+Protocol v0 is **FROZEN-RC** (release candidate `zalkanes-v0.1.0-rc1`). This
+package is the audit entry point for that candidate. It is **not**
+production-final: external audit + mainnet canary are still required before any
+mainnet activation (which remains `None`).
