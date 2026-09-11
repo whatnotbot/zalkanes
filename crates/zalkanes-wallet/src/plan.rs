@@ -364,6 +364,25 @@ impl FundingPlan {
         }
     }
 
+    /// Canonical journal encoding of the selected inputs
+    /// ("pool:txid_hex:index", comma-joined).
+    pub fn journal_inputs(&self) -> &str {
+        match self {
+            FundingPlan::Transparent(p) => &p.journal_inputs,
+            #[cfg(feature = "shielded")]
+            FundingPlan::Shielded(p) => &p.journal_inputs,
+        }
+    }
+
+    /// The request kind ("prepare" / "deploy" / "call").
+    pub fn kind(&self) -> &'static str {
+        match self {
+            FundingPlan::Transparent(p) => p.request.kind(),
+            #[cfg(feature = "shielded")]
+            FundingPlan::Shielded(p) => p.request.kind(),
+        }
+    }
+
     /// The canonical chain identity this plan is pinned to.
     pub fn canonical_tip(&self) -> CanonicalTip {
         match self {
@@ -528,6 +547,9 @@ fn disclosure_line() -> String {
 pub struct TransparentPlan {
     /// The unsigned inputs/outputs/fee/change from `zalkanes-tx`.
     pub prepared: zalkanes_tx::PreparedTx,
+    /// Canonical journal encoding of the selected inputs
+    /// ("pool:txid_hex:index", comma-joined), for cross-store recovery.
+    pub(crate) journal_inputs: String,
     pub request: TxRequest,
     pub branch_id: BranchId,
     pub target_height: u32,

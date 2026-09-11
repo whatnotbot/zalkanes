@@ -261,6 +261,7 @@ impl ShieldedFunding {
 
         let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
         let expected = build_expectations(&sel, &orchard_meta, &ironwood_meta, &pczt, change)?;
+        let journal_inputs = journal_inputs_for(&sel);
 
         let transparent_outputs = vec![crate::plan::PlanOutput {
             value: 0,
@@ -297,6 +298,7 @@ impl ShieldedFunding {
             orchard_sign,
             ironwood_sign,
             expected,
+            journal_inputs,
             expected_change_cmx: None,
             circuit_version: circuit_version(branch_id)?,
             signed: None,
@@ -352,6 +354,7 @@ impl ShieldedFunding {
 
         let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
         let expected = build_expectations(&sel, &orchard_meta, &ironwood_meta, &pczt, change)?;
+        let journal_inputs = journal_inputs_for(&sel);
 
         let carrier_script = zalkanes_tx::p2sh_script_pubkey(&redeem);
         let transparent_outputs: Vec<crate::plan::PlanOutput> = carrier_values
@@ -392,6 +395,7 @@ impl ShieldedFunding {
             orchard_sign,
             ironwood_sign,
             expected,
+            journal_inputs,
             expected_change_cmx: None,
             circuit_version: circuit_version(branch_id)?,
             signed: None,
@@ -399,6 +403,24 @@ impl ShieldedFunding {
             intent_hash,
         })))
     }
+}
+
+/// Canonical journal encoding of a selection's inputs: "pool:txid_hex:index"
+/// per input (internal txid byte order), comma-joined, in selection order.
+fn journal_inputs_for(sel: &ShieldedSelection) -> String {
+    sel.spends
+        .iter()
+        .zip(&sel.output_refs)
+        .map(|(s, r)| {
+            format!(
+                "{}:{}:{}",
+                pool_tag(s.pool),
+                hex::encode(r.txid().as_ref()),
+                r.output_index()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 /// Pool tag byte as committed in the plan intent hash (1 = Orchard,
@@ -600,6 +622,9 @@ pub struct ShieldedPlan {
     pub(crate) ironwood_sign: Vec<(usize, SpendAuthorizingKey)>,
     /// Everything the finalized PCZT must match, recorded at plan time.
     pub(crate) expected: ShieldedExpectations,
+    /// Canonical journal encoding of the selected inputs
+    /// ("pool:txid_hex:index", comma-joined), for cross-store recovery.
+    pub(crate) journal_inputs: String,
     /// The verified change cmx, stashed by extraction for the post-extract
     /// re-binding check.
     pub(crate) expected_change_cmx: Option<[u8; 32]>,

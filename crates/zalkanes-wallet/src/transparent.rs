@@ -126,8 +126,16 @@ impl FundingSource for TransparentFunding {
             kind,
         );
 
+        let journal_inputs = prepared
+            .inputs
+            .iter()
+            .map(|i| format!("0:{}:{}", hex::encode(i.outpoint.hash()), i.outpoint.n()))
+            .collect::<Vec<_>>()
+            .join(",");
+
         Ok(FundingPlan::Transparent(Box::new(TransparentPlan {
             prepared,
+            journal_inputs,
             request: request.clone(),
             branch_id,
             target_height: ctx.target_height,

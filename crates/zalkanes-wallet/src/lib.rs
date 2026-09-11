@@ -33,8 +33,12 @@ pub mod chain_source;
 pub mod funding;
 #[cfg(feature = "shielded")]
 pub mod journal;
+#[cfg(all(test, feature = "shielded"))]
+mod lock_race_tests;
 pub mod plan;
 pub mod policy;
+#[cfg(feature = "shielded")]
+pub mod recovery;
 #[cfg(feature = "shielded")]
 pub mod shielded;
 #[cfg(feature = "shielded")]
@@ -61,6 +65,10 @@ pub use broadcast::{
 pub use chain_source::{CanonicalChainSource, ZebraCanonicalChainSource};
 #[cfg(feature = "shielded")]
 pub use journal::{Journal, JournalStage};
+#[cfg(feature = "shielded")]
+pub use recovery::{
+    lock_owner_hex, record_plan, startup_recover, LockView, LockedOutput, RecoveryReport,
+};
 #[cfg(feature = "shielded")]
 pub use shielded::{ShieldedFunding, ShieldedSelection, ShieldedSpend, ShieldedWallet, SyncStatus};
 #[cfg(feature = "shielded")]
