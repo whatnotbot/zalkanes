@@ -17,7 +17,10 @@ jobs:
     env:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
-      ZEBRA_VERSION: 6.3.0
+      # NOTE: must NOT be named ZEBRA_* — zebrad treats every ZEBRA_* env
+      # var as configuration (ZEBRA_VERSION was parsed as an unknown top-level
+      # `version` field and aborted startup).
+      ZEBRAD_RELEASE: 6.3.0
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -26,8 +29,8 @@ jobs:
       - name: fetch pinned zebrad release (verified checksum)
         run: |
           set -euo pipefail
-          BASE="https://github.com/ZcashFoundation/zebra/releases/download/v${ZEBRA_VERSION}"
-          FILE="zebrad-${ZEBRA_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          BASE="https://github.com/ZcashFoundation/zebra/releases/download/v${ZEBRAD_RELEASE}"
+          FILE="zebrad-${ZEBRAD_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
           curl -sSLO "$BASE/$FILE"
           curl -sSLO "$BASE/$FILE.sha256"
           sha256sum -c "$FILE.sha256"
@@ -42,58 +45,33 @@ jobs:
           mkdir -p /tmp/zebra-regtest
           # Same activation heights as deploy/zebra/zebra-regtest.toml, so the
           # regtest chain runs the frozen NU6.3 rules the wallet targets.
-          # Version-robust: let zebrad generate its own canonical config, then
-          # patch ONLY the fields we need. (Hand-written configs broke twice on
-          # field-name drift between zebrad releases.)
-          zebrad generate -o /tmp/zebra-regtest/zebrad.toml
-          python3 - <<'PY'
-          import re
-          p = "/tmp/zebra-regtest/zebrad.toml"
-          s = open(p).read()
+          # Minimal explicit config in the exact shape used in production
+          # (deploy/zebra/zebra-regtest.toml), which is known-good for this
+          # pinned zebrad. Patching zebrad's generated config proved fragile:
+          # keys landed in the wrong sections and duplicated existing ones.
+          cat > /tmp/zebra-regtest/zebrad.toml <<'ZCFG'
+          [network]
+          network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
+          listen_addr = "127.0.0.1:18233"
 
-          def set_key(text, key, value, section=None):
-              """Replace an existing key in place, or append it to `section`.
-              Never inserts a duplicate (zebrad rejects duplicate keys)."""
-              pat = re.compile(r'(?m)^(#\s*)?' + re.escape(key) + r'\s*=.*$')
-              if pat.search(text):
-                  return pat.sub(f'{key} = {value}', text, count=1)
-              if section and f'[{section}]' in text:
-                  return text.replace(f'[{section}]', f'[{section}]\n{key} = {value}', 1)
-              return text + f'\n[{section}]\n{key} = {value}\n' if section else text
+          [state]
+          cache_dir = "/tmp/zebra-regtest/state"
+          ephemeral = true
 
-          # Regtest with every upgrade active from height 1 (matches
-          # ConsensusParams::Regtest and deploy/zebra/zebra-regtest.toml).
-          s = set_key(s, 'network',
-                      '{ regtest = true, params = { activation_heights = '
-                      '{ NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }',
-                      'network')
-          s = set_key(s, 'listen_addr', '"127.0.0.1:18233"', 'network')
-          s = set_key(s, 'cache_dir', '"/tmp/zebra-regtest/state"', 'state')
-          s = set_key(s, 'ephemeral', 'true', 'state')
-          s = set_key(s, 'checkpoint_sync', 'false', 'consensus')
-          s = set_key(s, 'enable_cookie_auth', 'false', 'rpc')
-          s = set_key(s, 'miner_address', '"t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"', 'mining')
+          [consensus]
+          checkpoint_sync = false
 
-          # The RPC listen_addr lives under [rpc]; the first listen_addr in the
-          # file belongs to [network], so patch the [rpc] one by section.
-          def set_in_section(text, section, key, value):
-              lines, out, cur, done = text.split("\n"), [], None, False
-              for ln in lines:
-                  if ln.startswith("[") and ln.endswith("]"):
-                      if cur == f'[{section}]' and not done:
-                          out.append(f'{key} = {value}'); done = True
-                      cur = ln
-                  if cur == f'[{section}]' and re.match(r'^(#\s*)?' + re.escape(key) + r'\s*=', ln):
-                      out.append(f'{key} = {value}'); done = True; continue
-                  out.append(ln)
-              if cur == f'[{section}]' and not done:
-                  out.append(f'{key} = {value}')
-              return "\n".join(out)
+          [rpc]
+          listen_addr = "127.0.0.1:18232"
+          enable_cookie_auth = false
 
-          s = set_in_section(s, 'rpc', 'listen_addr', '"127.0.0.1:18232"')
-          open(p, "w").write(s)
-          PY
+          [mining]
+          internal_miner = false
+          miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
+          ZCFG
           echo "── effective zebrad config ──"; cat /tmp/zebra-regtest/zebrad.toml
+          # Prove no stray ZEBRA_* variable can be reinterpreted as config.
+          echo "── ZEBRA_* environment (must be empty) ──"; env | grep '^ZEBRA_' || echo "(none)"
           zebrad -c /tmp/zebra-regtest/zebrad.toml start > /tmp/zebrad.log 2>&1 &
           echo $! > /tmp/zebrad.pid
           # Wait for the RPC port to answer.
@@ -136,6 +114,10 @@ jobs:
           set -euo pipefail
           cargo build --release -p zalkanes-cli
           BIN=target/release/zalkanes
+          rpc() {
+            curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
+              -d "{\"jsonrpc\":\"1.0\",\"id\":\"ci\",\"method\":\"$1\",\"params\":$2}"
+          }
 
           echo "── wallet create (real treestate from the live node) ──"
           "$BIN" wallet create
@@ -147,6 +129,27 @@ jobs:
 
           echo "── scan real regtest blocks while LOCKED ──"
           "$BIN" wallet scan
+
+          echo "── wallet scanned identity == Zebra canonical tip ──"
+          "$BIN" wallet status | tee /tmp/status.txt
+          grep -q "synced" /tmp/status.txt
+          if grep -q "NOT synced" /tmp/status.txt; then
+            echo "::error::wallet did not reach the canonical tip"; exit 1
+          fi
+
+          echo "── mine further and rescan: wallet tracks the advancing tip ──"
+          rpc generate '[10]' > /dev/null
+          "$BIN" wallet scan
+          "$BIN" wallet status | tee /tmp/status2.txt
+          if grep -q "NOT synced" /tmp/status2.txt; then
+            echo "::error::wallet did not track the advancing tip"; exit 1
+          fi
+
+          echo "── restart/reopen preserves wallet identity ──"
+          ADDR1=$("$BIN" wallet address)
+          ADDR2=$("$BIN" wallet address)   # fresh process = reopen
+          test "$ADDR1" = "$ADDR2"
+          "$BIN" wallet scan               # reopen + rescan is idempotent
 
           echo "── a shielded spend must be refused while LOCKED ──"
           if "$BIN" contract call $(printf '0%.0s' {1..64}) 1 --funding shielded --yes; then
@@ -163,7 +166,22 @@ jobs:
           "$BIN" contract call $(printf '0%.0s' {1..64}) 1 --dry-run || true
           test ! -f /tmp/zalkanes-wallet/journal.sqlite
 
-          echo "live regtest acceptance OK"
+          echo "LIVE REGTEST BASELINE OK"
+
+      - name: classify the note-level branch-reorg gap
+        run: |
+          echo "Live baseline above is GREEN against a real pinned zebrad."
+          echo
+          echo "NOT covered here: note-level BRANCH REORG (a shielded note"
+          echo "received on a removed branch disappearing; a spend rolling back)."
+          echo "Inducing that requires building and submitting a COMPETING chain"
+          echo "with more work than the canonical one. Zebra exposes submitblock,"
+          echo "but constructing valid competing regtest blocks is machinery this"
+          echo "repository does not have. The deterministic wallet-side matrix in"
+          echo "crates/zalkanes-wallet/src/wallet_reorg_tests.rs exercises the real"
+          echo "rewind/rescan code against fabricated competing chains, which is"
+          echo "NOT a substitute for observing a live node reorganise."
+          echo "Classification: E (expected absence of competing-chain machinery)."
 
       - name: node log tail
         if: always()
