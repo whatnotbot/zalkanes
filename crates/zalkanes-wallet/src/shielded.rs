@@ -122,9 +122,16 @@ pub struct ShieldedSelection {
     /// The change address (an Orchard/Ironwood address owned by the account).
     pub change_address: Address,
     pub change_fvk: FullViewingKey,
+    /// Spend authorizing key matching `change_fvk`: in a bundle that disables
+    /// cross-address transfers, the change output is paired with a fabricated
+    /// zero-valued spend at the change address which must be signed like any
+    /// real spend (upstream `add_change_output` contract).
+    pub change_ask: SpendAuthorizingKey,
     pub change_ovk: Option<OutgoingViewingKey>,
     /// Which pool the change is returned to.
     pub change_pool: ValuePool,
+    /// The height whose end-of-block treestate the anchors below are roots of.
+    pub anchor_height: u32,
     pub orchard_anchor: Option<Anchor>,
     pub ironwood_anchor: Option<Anchor>,
     /// The wallet-local output references reserved by this selection (used to
@@ -518,7 +525,7 @@ fn commit_shielded(
             .to_bytes();
         anchors.push(crate::plan::PlanAnchor {
             pool: 1,
-            height: ctx.chain_tip.height,
+            height: sel.anchor_height,
             root,
         });
     }
@@ -529,7 +536,7 @@ fn commit_shielded(
             .to_bytes();
         anchors.push(crate::plan::PlanAnchor {
             pool: 2,
-            height: ctx.chain_tip.height,
+            height: sel.anchor_height,
             root,
         });
     }
@@ -639,7 +646,7 @@ impl ShieldedPlan {
         vec![
             format!(
                 "Shielded spends:    {} note(s), {} zat",
-                self.orchard_sign.len() + self.ironwood_sign.len(),
+                self.expected.spends.len(),
                 self.selected_value
             ),
             format!(
@@ -1311,7 +1318,10 @@ fn assemble_and_build(
 }
 
 /// Map each selected spend to its (possibly randomized) action index, so the
-/// Signer signs the right action in each bundle.
+/// Signer signs the right action in each bundle. The change output's action is
+/// included: its fabricated zero-valued spend (at the change address) must be
+/// signed with the change account's spend authorizing key, exactly like a real
+/// spend (upstream `add_change_output` contract).
 #[allow(clippy::type_complexity)]
 fn signing_plans(
     sel: &ShieldedSelection,
@@ -1343,6 +1353,16 @@ fn signing_plans(
             }
         }
     }
+
+    let (change_meta, change_bucket) = match sel.change_pool {
+        ValuePool::Orchard => (orchard_meta, &mut orchard),
+        ValuePool::Ironwood => (ironwood_meta, &mut ironwood),
+    };
+    let change_idx = change_meta
+        .output_action_index(0)
+        .ok_or_else(|| anyhow!("change output missing action index"))?;
+    change_bucket.push((change_idx, sel.change_ask.clone()));
+
     Ok((orchard, ironwood))
 }
 

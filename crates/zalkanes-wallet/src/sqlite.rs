@@ -417,8 +417,16 @@ impl ShieldedWallet for SqliteShieldedWallet {
             );
         }
 
+        if zebra_tip < 2 {
+            bail!("zebra tip {zebra_tip} too low for shielded spending");
+        }
         let target_height = BlockHeight::from_u32(zebra_tip + 1);
-        let anchor_height = BlockHeight::from_u32(zebra_tip);
+        // The newest checkpoint our per-block `put_blocks` scan loop leaves in
+        // the note-commitment trees is the state through `tip - 1` (the tip
+        // block's own end-state is checkpointed by the NEXT scan step). The
+        // anchor therefore uses `tip - 1` — a valid prior-block treestate that
+        // always exists once the wallet is fully scanned to `tip`.
+        let anchor_height = BlockHeight::from_u32(zebra_tip - 1);
 
         let mut db = self.db.borrow_mut();
         let notes = db
@@ -517,8 +525,10 @@ impl ShieldedWallet for SqliteShieldedWallet {
             selected_value,
             change_address,
             change_fvk: self.orchard_fvk.clone(),
+            change_ask: self.orchard_ask.clone(),
             change_ovk: Some(self.orchard_fvk.to_ovk(orchard::keys::Scope::Internal)),
             change_pool: ValuePool::Orchard,
+            anchor_height: u32::from(anchor_height),
             orchard_anchor,
             ironwood_anchor,
             output_refs,

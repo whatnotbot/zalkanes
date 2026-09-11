@@ -151,8 +151,10 @@ impl ShieldedWallet for MockWallet {
             selected_value: self.spends.iter().map(|s| s.value).sum(),
             change_address: change_fvk.address_at(self.change_index, Scope::Internal),
             change_fvk: change_fvk.clone(),
+            change_ask: self.spends[0].ask.clone(),
             change_ovk: Some(change_fvk.to_ovk(Scope::Internal)),
             change_pool: ValuePool::Orchard,
+            anchor_height: 1,
             orchard_anchor,
             ironwood_anchor,
             output_refs,
@@ -492,4 +494,91 @@ fn stale_shielded_prove_sign_extract_rejected() {
         Ok(_) => panic!("stale extract_verified must fail"),
         Err(e) => assert!(e.to_string().contains("StalePlan"), "got: {e}"),
     }
+}
+
+/// Regression for the MissingSpendAuthSig live failure: the change action's
+/// fabricated zero-valued spend (no dummy_sk) must be covered by the plan's
+/// signing list, and every dummy spend must be io-finalizer-signed, so the
+/// Signer round-trip leaves EVERY action signed in both pools.
+#[test]
+fn all_actions_signed_after_signer_round_trip() {
+    let mut plan = default_plan();
+    let pczt = plan.pczt.take().unwrap();
+
+    let count_sigs = |pczt: pczt::Pczt, label: &str| -> pczt::Pczt {
+        let mut o = (0usize, 0usize);
+        let mut i = (0usize, 0usize);
+        let v = pczt::roles::verifier::Verifier::new(pczt);
+        let v = v
+            .with_orchard::<String, _>(|b| {
+                o = (
+                    b.actions().len(),
+                    b.actions()
+                        .iter()
+                        .filter(|a| a.spend().spend_auth_sig().is_some())
+                        .count(),
+                );
+                for (n, a) in b.actions().iter().enumerate() {
+                    println!(
+                        "  orchard action {n}: sig={} spend_value={:?} out_value={:?} dummy_sk={}",
+                        a.spend().spend_auth_sig().is_some(),
+                        a.spend().value().map(|v| v.inner()),
+                        a.output().value().map(|v| v.inner()),
+                        a.spend().dummy_sk().is_some(),
+                    );
+                }
+                Ok(())
+            })
+            .unwrap();
+        let v = v
+            .with_ironwood::<String, _>(|b| {
+                i = (
+                    b.actions().len(),
+                    b.actions()
+                        .iter()
+                        .filter(|a| a.spend().spend_auth_sig().is_some())
+                        .count(),
+                );
+                Ok(())
+            })
+            .unwrap();
+        println!(
+            "{label}: orchard {}/{} signed, ironwood {}/{} signed",
+            o.1, o.0, i.1, i.0
+        );
+        v.finish()
+    };
+
+    let pczt = count_sigs(pczt, "after plan (io_finalized)");
+    // Production sequence minus proving: Signer round-trip.
+    let mut signer = pczt::roles::signer::Signer::new(pczt).unwrap();
+    for (idx, ask) in &plan.orchard_sign {
+        signer.sign_orchard(*idx, ask).unwrap();
+    }
+    for (idx, ask) in &plan.ironwood_sign {
+        signer.sign_ironwood(*idx, ask).unwrap();
+    }
+    let pczt = signer.finish();
+    let mut all_signed = (false, false);
+    let v = pczt::roles::verifier::Verifier::new(pczt);
+    let v = v
+        .with_orchard::<String, _>(|b| {
+            all_signed.0 = b
+                .actions()
+                .iter()
+                .all(|a| a.spend().spend_auth_sig().is_some());
+            Ok(())
+        })
+        .unwrap();
+    let _ = v
+        .with_ironwood::<String, _>(|b| {
+            all_signed.1 = b
+                .actions()
+                .iter()
+                .all(|a| a.spend().spend_auth_sig().is_some());
+            Ok(())
+        })
+        .unwrap();
+    assert!(all_signed.0, "every orchard action must be signed");
+    assert!(all_signed.1, "every ironwood action must be signed");
 }
