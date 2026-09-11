@@ -166,7 +166,8 @@ impl CanonicalChainSource for ZebraCanonicalChainSource {
     }
 
     fn tree_state(&self, height: u32) -> Result<ChainState> {
-        let ts: TreestateResponse = self.rpc("z_gettreestate", serde_json::json!([height]))?;
+        let ts: TreestateResponse =
+            self.rpc("z_gettreestate", serde_json::json!([height.to_string()]))?;
         let network_name = match self.network {
             Network::MainNetwork => "main",
             Network::TestNetwork => "test",
