@@ -60,63 +60,110 @@ pub struct SqliteShieldedWallet {
 }
 
 impl SqliteShieldedWallet {
-    /// Opens (or creates and initializes) the wallet at `path`.
-    ///
-    /// `seed` is the ZIP-32 HD seed (>= 32 bytes). It is held in memory only —
-    /// never written to the Zalkanes consensus DB, never logged, never printed.
-    /// On first creation an account is derived and tracked; on reopen the
-    /// account is looked up and the spending keys re-derived from `seed`.
-    pub fn open_or_create(
+    /// Shared open + key-derivation helper. Opens the DB, derives the Orchard
+    /// spending keys from `seed` (held in memory only), and initializes schema.
+    fn open_db_and_derive(
+        path: &std::path::Path,
+        network: Network,
+        seed: &SecretVec<u8>,
+    ) -> Result<(Db, FullViewingKey, SpendAuthorizingKey)> {
+        let mut db = WalletDb::for_path(path, network, SystemClock, OsRng)
+            .map_err(|e| anyhow!("open wallet db: {e}"))?;
+        let usk = UnifiedSpendingKey::from_seed(&network, seed.expose_secret(), AccountId::ZERO)
+            .map_err(|e| anyhow!("derive unified spending key: {e}"))?;
+        zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None)
+            .map_err(|e| anyhow!("init wallet db: {e}"))?;
+        let fvk = FullViewingKey::from(usk.orchard());
+        let ask = SpendAuthorizingKey::from(usk.orchard());
+        Ok((db, fvk, ask))
+    }
+
+    fn from_parts(
+        db: Db,
+        account_id: AccountUuid,
+        fvk: FullViewingKey,
+        ask: SpendAuthorizingKey,
+    ) -> Self {
+        Self {
+            db: RefCell::new(db),
+            account_id,
+            orchard_fvk: fvk,
+            orchard_ask: ask,
+            zebra_tip: Cell::new(0),
+            zebra_tip_hash: Cell::new([0u8; 32]),
+        }
+    }
+
+    /// Create a NEW wallet. Fails if the wallet/account already exists. Derives
+    /// a real birthday from the canonical treestate at `tip - 100` (upstream
+    /// reorg buffer).
+    pub fn create_new(
         path: &std::path::Path,
         network: Network,
         seed: SecretVec<u8>,
         chain_source: &dyn crate::chain_source::CanonicalChainSource,
     ) -> Result<Self> {
-        let mut db = WalletDb::for_path(path, network, SystemClock, OsRng)
-            .map_err(|e| anyhow!("open wallet db: {e}"))?;
-
-        // Derive the spending keys before handing the seed to the migrator.
-        let usk = UnifiedSpendingKey::from_seed(&network, seed.expose_secret(), AccountId::ZERO)
-            .map_err(|e| anyhow!("derive unified spending key: {e}"))?;
-
-        // Initialize schema (no seed needed for a fresh wallet). A wallet that
-        // already exists is opened in place; migrations that require the seed
-        // are surfaced as an error rather than silently re-derived.
-        zcash_client_sqlite::wallet::init::init_wallet_db(&mut db, None)
-            .map_err(|e| anyhow!("init wallet db: {e}"))?;
-
-        let account_id = match db
+        let (mut db, fvk, ask) = Self::open_db_and_derive(path, network, &seed)?;
+        if !db
             .get_account_ids()
             .map_err(|e| anyhow!("account ids: {e}"))?
+            .is_empty()
         {
-            ids if ids.is_empty() => {
-                // Real birthday: the canonical treestate at `tip - 100` (upstream
-                // reorg buffer), so a reorg cannot drop a newly-targeted payment
-                // below the wallet's birthday. The treestate is the block BEFORE
-                // the birthday height.
-                let tip = chain_source.canonical_tip()?;
-                let birthday_state_height = tip.height.saturating_sub(100);
-                let chain_state = chain_source.tree_state(birthday_state_height)?;
-                let birthday = AccountBirthday::from_parts(chain_state, None);
-                let (id, _usk) = db
-                    .create_account("zalkanes", &seed, &birthday, None)
-                    .map_err(|e| anyhow!("create account: {e}"))?;
-                id
-            }
-            ids => ids[0],
-        };
+            bail!("wallet already exists; use reopen() or a fresh path");
+        }
+        let tip = chain_source.canonical_tip()?;
+        let birthday_state_height = tip.height.saturating_sub(100);
+        let chain_state = chain_source.tree_state(birthday_state_height)?;
+        let birthday = AccountBirthday::from_parts(chain_state, None);
+        let (account_id, _) = db
+            .create_account("zalkanes", &seed, &birthday, None)
+            .map_err(|e| anyhow!("create account: {e}"))?;
+        Ok(Self::from_parts(db, account_id, fvk, ask))
+    }
 
-        let orchard_fvk = FullViewingKey::from(usk.orchard());
-        let orchard_ask = SpendAuthorizingKey::from(usk.orchard());
+    /// Reopen an EXISTING wallet. Fails if it does not exist. Preserves the
+    /// stored birthday, scanned progress, account identity, and reservations;
+    /// does NOT recompute the birthday from the current Zebra tip.
+    pub fn reopen(path: &std::path::Path, network: Network, seed: SecretVec<u8>) -> Result<Self> {
+        let (db, fvk, ask) = Self::open_db_and_derive(path, network, &seed)?;
+        let ids = db
+            .get_account_ids()
+            .map_err(|e| anyhow!("account ids: {e}"))?;
+        let account_id = ids
+            .first()
+            .copied()
+            .ok_or_else(|| anyhow!("wallet does not exist; use create_new() or restore()"))?;
+        Ok(Self::from_parts(db, account_id, fvk, ask))
+    }
 
-        Ok(Self {
-            db: RefCell::new(db),
-            account_id,
-            orchard_fvk,
-            orchard_ask,
-            zebra_tip: Cell::new(0),
-            zebra_tip_hash: Cell::new([0u8; 32]),
-        })
+    /// Restore a wallet from a seed at an EXPLICIT birthday height. Fails if the
+    /// wallet already exists. Never guesses the birthday: the caller must supply
+    /// the first block height to scan; the treestate for the block immediately
+    /// before it is fetched from Zebra.
+    pub fn restore(
+        path: &std::path::Path,
+        network: Network,
+        seed: SecretVec<u8>,
+        birthday_height: u32,
+        chain_source: &dyn crate::chain_source::CanonicalChainSource,
+    ) -> Result<Self> {
+        if birthday_height == 0 {
+            bail!("restore birthday height must be >= 1");
+        }
+        let (mut db, fvk, ask) = Self::open_db_and_derive(path, network, &seed)?;
+        if !db
+            .get_account_ids()
+            .map_err(|e| anyhow!("account ids: {e}"))?
+            .is_empty()
+        {
+            bail!("wallet already exists; use reopen() or a fresh path");
+        }
+        let chain_state = chain_source.tree_state(birthday_height - 1)?;
+        let birthday = AccountBirthday::from_parts(chain_state, None);
+        let (account_id, _) = db
+            .create_account("zalkanes", &seed, &birthday, None)
+            .map_err(|e| anyhow!("restore account: {e}"))?;
+        Ok(Self::from_parts(db, account_id, fvk, ask))
     }
 
     /// Update the canonical Zebra tip (height + hash) this wallet plans against.
@@ -138,33 +185,30 @@ impl SqliteShieldedWallet {
 
         // Compute everything requiring an immutable borrow BEFORE acquiring the
         // mutable borrow (a nested borrow would panic the RefCell).
-        let (ufvks, nullifiers, start_height, mut prev_hash) = {
+        // `prev_hash` is `Some` when the wallet has a stored prior scanned block
+        // (an existing wallet), and `None` for a fresh wallet (continuity is then
+        // enforced against the birthday ChainState by put_blocks).
+        let (ufvks, nullifiers, start_height, mut prev_hash, birthday) = {
             let db = self.db.borrow();
             let ufvks = db
                 .get_unified_full_viewing_keys()
                 .map_err(|e| anyhow!("ufvks: {e}"))?;
             let nullifiers = Nullifiers::unspent(&*db).map_err(|e| anyhow!("nullifiers: {e}"))?;
-            let start_height = match db
+            let birthday = u32::from(
+                db.get_account_birthday(self.account_id)
+                    .map_err(|e| anyhow!("account birthday: {e}"))?,
+            );
+            let (start_height, prev_hash): (u32, Option<[u8; 32]>) = match db
                 .block_fully_scanned()
                 .map_err(|e| anyhow!("block_fully_scanned: {e}"))?
             {
-                Some(meta) => u32::from(meta.block_height()) + 1,
-                None => {
-                    let birthday = db
-                        .get_account_birthday(self.account_id)
-                        .map_err(|e| anyhow!("account birthday: {e}"))?;
-                    u32::from(birthday)
-                }
+                Some(meta) => (
+                    u32::from(meta.block_height()) + 1,
+                    Some(meta.block_hash().0),
+                ),
+                None => (birthday, None),
             };
-            let prev_hash = match start_height {
-                h if h > 0 => db
-                    .get_block_hash(BlockHeight::from_u32(h - 1))
-                    .map_err(|e| anyhow!("block hash: {e}"))?
-                    .map(|b| b.0)
-                    .unwrap_or([0u8; 32]),
-                _ => [0u8; 32],
-            };
-            (ufvks, nullifiers, start_height, prev_hash)
+            (ufvks, nullifiers, start_height, prev_hash, birthday)
         };
         let scanning_keys = ScanningKeys::from_account_ufvks(ufvks);
 
@@ -174,16 +218,20 @@ impl SqliteShieldedWallet {
 
         while height <= target.height {
             let from_state = chain_source.tree_state(height - 1)?;
-            // Reorg check (skip the very first block, where the wallet has no
-            // prior hash; continuity against the birthday prior state is enforced
-            // by put_blocks below).
-            if height > start_height && from_state.block_hash().0 != prev_hash {
-                bail!(
-                    "reorg detected at height {}: wallet hash {}, zebra hash {}",
-                    height - 1,
-                    hex::encode(prev_hash),
-                    hex::encode(from_state.block_hash().0)
-                );
+            // Reorg check: if the wallet has a stored prior hash, it MUST match
+            // Zebra at the same height before scanning forward — including the
+            // first new block of an existing wallet.
+            if let Some(prev) = prev_hash {
+                if from_state.block_hash().0 != prev {
+                    // Reorg: find the highest common ancestor using wallet-stored
+                    // scanned hashes vs our Zebra, rewind canonically, then resume.
+                    height =
+                        rewind_to_common_ancestor(&mut db, chain_source, height - 1, birthday)?;
+                    nullifiers = Nullifiers::unspent(&*db)
+                        .map_err(|e| anyhow!("nullifiers after rewind: {e}"))?;
+                    prev_hash = Some(chain_source.block_hash(height - 1)?);
+                    continue;
+                }
             }
 
             let block = chain_source.block(height)?;
@@ -204,7 +252,7 @@ impl SqliteShieldedWallet {
 
             db.put_blocks(&from_state, vec![scanned])
                 .map_err(|e| anyhow!("put block {height}: {e}"))?;
-            prev_hash = chain_source.block_hash(height)?;
+            prev_hash = Some(chain_source.block_hash(height)?);
             height += 1;
         }
 
@@ -243,6 +291,15 @@ impl SqliteShieldedWallet {
                 Ok(u32::from(birthday))
             }
         }
+    }
+
+    /// The account's birthday height (the first block to scan).
+    pub fn birthday_height(&self) -> Result<u32> {
+        let db = self.db.borrow();
+        Ok(u32::from(
+            db.get_account_birthday(self.account_id)
+                .map_err(|e| anyhow!("account birthday: {e}"))?,
+        ))
     }
 
     pub fn account_id(&self) -> AccountUuid {
@@ -474,6 +531,38 @@ fn chain_state_to_block_metadata(cs: &ChainState) -> BlockMetadata {
     )
 }
 
+/// Find the highest common ancestor between the wallet's scanned chain and our
+/// Zebra, rewind the wallet to it via the canonical `rewind_to_chain_state`, and
+/// return the next block height to scan (ancestor + 1). Bounded by `birthday`;
+/// a reorg that crosses the wallet birthday is an error (requires re-restore).
+fn rewind_to_common_ancestor(
+    db: &mut Db,
+    chain_source: &dyn crate::chain_source::CanonicalChainSource,
+    mut height: u32,
+    birthday: u32,
+) -> Result<u32> {
+    loop {
+        let wallet_hash = db
+            .get_block_hash(BlockHeight::from_u32(height))
+            .map_err(|e| anyhow!("wallet block hash {height}: {e}"))?
+            .map(|h| h.0);
+        let zebra_hash = chain_source.block_hash(height)?;
+        if wallet_hash == Some(zebra_hash) {
+            let chain_state = chain_source.tree_state(height)?;
+            db.rewind_to_chain_state(chain_state, std::collections::HashSet::new())
+                .map_err(|e| anyhow!("rewind_to_chain_state({height}): {e:?}"))?;
+            return Ok(height + 1);
+        }
+        if height <= birthday {
+            bail!(
+                "reorg crosses wallet birthday {birthday}; refuse to rewind further \
+                 (re-restore with an explicit earlier birthday required)"
+            );
+        }
+        height -= 1;
+    }
+}
+
 /// Map an Orchard-protocol value pool to the protocol-level shielded pool.
 fn pool_to_shielded_pool(pool: ValuePool) -> ShieldedPool {
     match pool {
@@ -529,7 +618,7 @@ mod tests {
             hex::encode(suffix)
         ));
 
-        let wallet = SqliteShieldedWallet::open_or_create(
+        let wallet = SqliteShieldedWallet::create_new(
             &path,
             Network::TestNetwork,
             random_seed(),
@@ -565,7 +654,7 @@ mod tests {
         ));
 
         // Tip 10_000 -> birthday prior state 9_900 -> first scan block 9_901.
-        let wallet = SqliteShieldedWallet::open_or_create(
+        let wallet = SqliteShieldedWallet::create_new(
             &path,
             Network::TestNetwork,
             random_seed(),
@@ -579,6 +668,71 @@ mod tests {
         );
 
         drop(wallet);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    fn tmp_path(tag: &str) -> std::path::PathBuf {
+        let mut suffix = [0u8; 8];
+        OsRng.fill_bytes(&mut suffix);
+        std::env::temp_dir().join(format!("zalkanes-{tag}-{}.sqlite", hex::encode(suffix)))
+    }
+
+    #[test]
+    fn create_new_twice_fails() {
+        let path = tmp_path("create-twice");
+        let mock = MockChainSource { tip: 200 };
+        SqliteShieldedWallet::create_new(&path, Network::TestNetwork, random_seed(), &mock)
+            .unwrap();
+        let err =
+            SqliteShieldedWallet::create_new(&path, Network::TestNetwork, random_seed(), &mock);
+        assert!(
+            err.is_err(),
+            "second create_new must fail, not silently reopen"
+        );
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reopen_preserves_birthday_and_account() {
+        let path = tmp_path("reopen");
+        let seed = random_seed();
+        let mock = MockChainSource { tip: 1_000 };
+        let w = SqliteShieldedWallet::create_new(
+            &path,
+            Network::TestNetwork,
+            SecretVec::new(seed.expose_secret().to_vec()),
+            &mock,
+        )
+        .unwrap();
+        let id_before = w.account_id();
+        let birthday_before = w.birthday_height().unwrap();
+        drop(w);
+
+        let w = SqliteShieldedWallet::reopen(&path, Network::TestNetwork, seed).unwrap();
+        assert_eq!(w.account_id(), id_before);
+        assert_eq!(w.birthday_height().unwrap(), birthday_before);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn reopen_missing_db_fails() {
+        let path = tmp_path("reopen-missing");
+        let err = SqliteShieldedWallet::reopen(&path, Network::TestNetwork, random_seed());
+        assert!(err.is_err(), "reopen on missing db must fail");
+    }
+
+    #[test]
+    fn restore_uses_explicit_birthday() {
+        let path = tmp_path("restore");
+        let mock = MockChainSource { tip: 10_000 };
+        let w =
+            SqliteShieldedWallet::restore(&path, Network::TestNetwork, random_seed(), 5_000, &mock)
+                .unwrap();
+        assert_eq!(
+            w.birthday_height().unwrap(),
+            5_000,
+            "restore must honor the explicit birthday"
+        );
         let _ = std::fs::remove_file(&path);
     }
 
