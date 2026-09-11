@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{anyhow, Result};
-use secrecy::{ExposeSecret, SecretVec};
+use secrecy::SecretVec;
 use zalkanes_wallet::{
     funding::TipSource, ShieldedWallet, SqliteShieldedWallet, ZebraCanonicalChainSource,
 };

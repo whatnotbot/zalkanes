@@ -337,7 +337,7 @@ impl SqliteShieldedWallet {
 
     /// A one-line summary of the wallet's unspent shielded notes by pool.
     pub fn shielded_note_summary(&self) -> Result<String> {
-        let mut db = self.db.borrow_mut();
+        let db = self.db.borrow_mut();
         let notes = db
             .select_unspent_notes(
                 self.account_id,

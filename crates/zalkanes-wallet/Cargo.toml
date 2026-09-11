@@ -55,3 +55,11 @@ shielded = [
 ]
 
 [dev-dependencies]
+
+[[example]]
+name = "create_testnet_wallet"
+required-features = ["shielded"]
+
+[[example]]
+name = "scan_testnet_wallet"
+required-features = ["shielded"]
