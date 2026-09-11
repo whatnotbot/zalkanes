@@ -206,7 +206,7 @@ impl ShieldedFunding {
             change,
             tx_version,
             expiry_height,
-            transparent_outputs,
+            &transparent_outputs,
             op_return,
             2,
         )?;
@@ -223,6 +223,7 @@ impl ShieldedFunding {
             tx_version,
             expiry_height,
             request,
+            transparent_outputs,
             pczt: Some(pczt),
             orchard_sign,
             ironwood_sign,
@@ -296,7 +297,7 @@ impl ShieldedFunding {
             change,
             tx_version,
             expiry_height,
-            transparent_outputs,
+            &transparent_outputs,
             &[],
             0,
         )?;
@@ -313,6 +314,7 @@ impl ShieldedFunding {
             tx_version,
             expiry_height,
             request,
+            transparent_outputs,
             pczt: Some(pczt),
             orchard_sign,
             ironwood_sign,
@@ -335,7 +337,7 @@ fn commit_shielded(
     change: u64,
     tx_version: &str,
     expiry_height: u32,
-    transparent_outputs: Vec<crate::plan::PlanOutput>,
+    transparent_outputs: &[crate::plan::PlanOutput],
     zalk_payload: &[u8],
     kind: u8,
 ) -> Result<String> {
@@ -403,7 +405,7 @@ fn commit_shielded(
         expiry_height,
         &inputs,
         &anchors,
-        &transparent_outputs,
+        transparent_outputs,
         Some(&crate::plan::PlanChange {
             value: change,
             pool: 1,
@@ -430,6 +432,9 @@ pub struct ShieldedPlan {
     pub tx_version: &'static str,
     pub expiry_height: u32,
     pub request: TxRequest,
+    /// The exact planned transparent output vector (value + scriptPubKey), in
+    /// order, used for post-extract structural verification.
+    pub transparent_outputs: Vec<crate::plan::PlanOutput>,
     pub pczt: Option<pczt::Pczt>,
     /// (action index, ask) pairs for the Orchard bundle, in signing order.
     pub orchard_sign: Vec<(usize, SpendAuthorizingKey)>,
@@ -528,31 +533,34 @@ impl ShieldedPlan {
             .transparent_bundle()
             .ok_or_else(|| anyhow!("extracted tx has no transparent bundle"))?;
 
-        // A shielded CALL must have no transparent funding input.
-        if matches!(self.request, TxRequest::Call { .. }) && !bundle.vin.is_empty() {
+        // A shielded CALL/PREPARE has zero transparent funding inputs.
+        if !bundle.vin.is_empty() {
             bail!(
-                "shielded CALL has {} transparent funding input(s)",
+                "shielded tx has {} transparent funding input(s)",
                 bundle.vin.len()
             );
         }
 
-        // The only value-bearing transparent outputs are the planned ones (the
-        // ZALK OP_RETURN is zero-value; PREPARE has the carrier outputs).
-        for (i, vout) in bundle.vout.iter().enumerate() {
-            if u64::from(vout.value()) != 0 && !matches!(self.request, TxRequest::Prepare { .. }) {
-                bail!("unexpected value-bearing transparent output {i}");
-            }
+        // The complete transparent output vector must match the plan exactly:
+        // count, order, value, and scriptPubKey.
+        if bundle.vout.len() != self.transparent_outputs.len() {
+            bail!(
+                "transparent output count mismatch: {} vs {}",
+                bundle.vout.len(),
+                self.transparent_outputs.len()
+            );
         }
-
-        // The ZALK OP_RETURN output must be present and exact for CALL/DEPLOY.
-        if let Some(payload) = self.request.op_return_payload() {
-            let script = zalkanes_tx::op_return_script(payload);
-            let found = bundle
-                .vout
-                .iter()
-                .any(|vout| vout.script_pubkey().0 .0.as_slice() == script.as_slice());
-            if !found {
-                bail!("ZALK OP_RETURN output missing or mutated");
+        for (i, (vout, planned)) in bundle
+            .vout
+            .iter()
+            .zip(&self.transparent_outputs)
+            .enumerate()
+        {
+            if u64::from(vout.value()) != planned.value {
+                bail!("transparent output {i} value mismatch");
+            }
+            if vout.script_pubkey().0 .0.as_slice() != planned.script.as_slice() {
+                bail!("transparent output {i} script mismatch");
             }
         }
 
