@@ -15,7 +15,12 @@ experimental):
 > existing testnet deployment is **pre-freeze experimental**. A fresh frozen-RC
 > testnet deployment is required before the milestone is complete.
 
-## Update 2026-09-12: frozen-RC live acceptance supersedes the V4-era caveat
+## Update 2026-09-12: frozen-CODE live acceptance (not a fresh RC activation)
+
+See `TESTNET-ACTIVATION-AUDIT.md` for the rigorous analysis: the activation
+height predates the protocol freeze, so this is acceptance of the frozen CODE
+on public testnet, NOT a fresh frozen-RC activation. A fresh activation plan
+is written there and is NOT executed (it needs explicit approval).
 
 The full shielded-wallet live acceptance ran against the FROZEN protocol
 (V5/ZIP-244 era manifest `57178628…`, verified live): shielded CALLs on the

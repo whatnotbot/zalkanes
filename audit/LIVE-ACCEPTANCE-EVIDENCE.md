@@ -1,5 +1,12 @@
 # Live acceptance evidence — shielded wallet + two-node determinism
 
+> **Scope caveat (see `TESTNET-ACTIVATION-AUDIT.md`):** this is acceptance of
+> the FROZEN CODE on public testnet. It is **not** a fresh frozen-RC
+> activation — the testnet activation height was frozen ~16 hours before the
+> protocol was, so some pre-freeze history above it is read under frozen
+> rules. The resulting state is nonetheless well-defined and was proven by an
+> independent empty-database resync.
+
 Date: 2026-09-11/12 (UTC+7 timestamps). Network: **Zcash public testnet**
 (NU6.3 / Ironwood active). Protocol: v0 `FROZEN-RC`, manifest hash
 `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752`
@@ -90,10 +97,12 @@ failures across ~651 blocks — roots byte-identical at every block
 
 The consensus test set — including verification of the 101 committed
 execution vectors (`test-vectors/execution/v1.json`) — is green in four
-configurations: aarch64 debug + release (native Apple Silicon), x86_64
-debug + release (**Rosetta 2 emulation, labeled as such**; GitHub Actions
-adds native x86_64 Linux on every push). Native non-CI x86_64 hardware and
-additional native ARM64 Linux runs remain open items.
+configurations on this host — aarch64 debug + release (native Apple
+Silicon) and x86_64 debug + release (**Rosetta 2 emulation, labeled as
+such**) — and in two NATIVE Linux CI configurations: x86_64
+(`CI` workflow) and **aarch64** (`arm64-determinism` workflow, GitHub-hosted
+`ubuntu-24.04-arm`), each in debug and release. Native ARM64 Linux is
+therefore covered and is no longer an external blocker.
 
 ## Fuzz campaign (Item 16.8)
 
@@ -104,9 +113,12 @@ re-runs clean; zero unresolved findings.
 
 ## Preserved gaps (honest)
 
-- Live zebrad-regtest note-level reorg evidence (removed-branch note
-  disappears / spend rolls back): requires a zebrad environment.
-- Real disk-full behavior: not simulatable here; read-only + corruption
-  refusal covered.
-- Native ARM64-Linux and non-emulated x86_64-macOS runs.
-- External security audit.
+- **Live note-level reorg evidence** (a shielded note received on a removed
+  branch disappearing; a spend rolling back). The `live-zebra-regtest`
+  workflow runs a real pinned zebrad v6.3.0 and covers live scanning and
+  custody, but inducing a reorg additionally requires constructing and
+  submitting a COMPETING chain — machinery this repo does not have yet.
+- **Fresh frozen-RC testnet activation** — see `TESTNET-ACTIVATION-AUDIT.md`.
+  Not performed; requires explicit approval.
+- **Non-emulated x86_64-macOS** runs (native x86_64 Linux is covered by CI).
+- **External security audit** — hard mainnet gate.
