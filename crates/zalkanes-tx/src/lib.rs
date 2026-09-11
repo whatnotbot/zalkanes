@@ -27,9 +27,14 @@ use zcash_script::script::Code;
 use zcash_transparent::{
     address::{Script, TransparentAddress},
     builder::TransparentBuilder,
-    bundle::{Authorized as TAuthorized, Bundle, OutPoint, TxIn, TxOut},
+    bundle::{Authorized as TAuthorized, Bundle, TxIn, TxOut},
     sighash::{SighashType, SignableInput as TransparentSignableInput, SIGHASH_ALL},
 };
+
+/// A transparent transaction outpoint (txid + output index), re-exported for
+/// consumers that need to reference funding/carrier UTXOs without depending on
+/// `zcash_transparent` directly.
+pub use zcash_transparent::bundle::OutPoint;
 
 /// ZIP-317 conventional fee (5000 zatoshi per logical action, min 2).
 ///

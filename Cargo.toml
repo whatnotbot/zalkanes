@@ -12,6 +12,7 @@ members = [
     "crates/zalkanes-sdk",
     "crates/zalkanes-build",
     "crates/zalkanes-tx",
+    "crates/zalkanes-wallet",
     "crates/zalkanes-testkit",
     "crates/zalkanes-cli",
 ]
@@ -95,6 +96,7 @@ zalkanes-rpc      = { path = "crates/zalkanes-rpc" }
 zalkanes-sdk      = { path = "crates/zalkanes-sdk" }
 zalkanes-build    = { path = "crates/zalkanes-build" }
 zalkanes-tx       = { path = "crates/zalkanes-tx" }
+zalkanes-wallet   = { path = "crates/zalkanes-wallet" }
 zalkanes-testkit  = { path = "crates/zalkanes-testkit" }
 
 [profile.release]

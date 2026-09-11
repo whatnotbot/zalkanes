@@ -1,0 +1,21 @@
+[package]
+name = "zalkanes-wallet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+zalkanes-core     = { workspace = true }
+zalkanes-tx       = { workspace = true }
+anyhow            = { workspace = true }
+thiserror         = { workspace = true }
+zcash_protocol    = { workspace = true }
+
+[features]
+default = []
+# Shielded funding via pczt / zcash_client_backend / zcash_client_sqlite.
+# Gated behind a feature because it pulls in the full Orchard proving stack;
+# the consensus path stays lightweight and the CI matrix stays green without it.
+shielded = []
+
+[dev-dependencies]

@@ -3769,6 +3769,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zalkanes-wallet"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "thiserror 1.0.64",
+ "zalkanes-core",
+ "zalkanes-tx",
+ "zcash_protocol",
+]
+
+[[package]]
 name = "zcash_address"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
