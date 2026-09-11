@@ -653,9 +653,16 @@ async fn confirm_tx(rpc: &rpc::ZcashRpc, txid: &str, addr: &str, network: Networ
             Ok(block_json["height"].as_u64().unwrap_or(0))
         }
         Network::Testnet => loop {
-            let tx = rpc.get_raw_transaction(txid, 1)?;
-            if tx["confirmations"].as_u64().unwrap_or(0) >= 1 {
-                return Ok(tx["height"].as_u64().unwrap_or(0));
+            match rpc.get_raw_transaction(txid, 1) {
+                Ok(tx) => {
+                    if tx["confirmations"].as_u64().unwrap_or(0) >= 1 {
+                        return Ok(tx["height"].as_u64().unwrap_or(0));
+                    }
+                }
+                Err(e) => {
+                    // Transient RPC/network errors must not abort the wait.
+                    tracing::warn!("getrawtransaction transient error, retrying: {e:#}");
+                }
             }
             tokio::time::sleep(std::time::Duration::from_secs(15)).await;
         },
