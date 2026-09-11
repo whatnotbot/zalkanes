@@ -1,37 +1,84 @@
-# Zalkanes Protocol v0 — Audit Package (RC)
+# Zalkanes Protocol v0 — Audit Package
 
-This directory is the single entry point for an external security/consensus
-auditor. It freezes the exact commit under review and points to the normative
-specification, consensus-critical source, dependency pins, threat model, and
-evidence.
+Single entry point for an external security/consensus auditor.
 
-## Commit under audit
+## Candidate under audit
 
-- **Git commit:** *(see tag `zalkanes-v0.1.0-rc1`)*
-- **Protocol manifest hash:** `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752` (SHA-256 over `protocol/v0.toml`); see `zalkanes_getInfo.protocol_manifest_hash`.
+| item | value |
+|---|---|
+| **Git commit** | see `CANDIDATE.txt` (written at freeze; verify with `git rev-parse HEAD`) |
+| **Protocol manifest hash** | `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752` (SHA-256 of `protocol/v0.toml`) |
+| **Protocol status** | v0, `FROZEN-RC` |
+| **Mainnet activation** | `MAINNET_ACTIVATION_HEIGHT = None` — contract execution is disabled on mainnet by construction |
+| **Testnet activation** | height 4,338,100 |
 
-> The manifest hash above is the hash of the manifest at the audited commit.
-> Any change to a consensus constant changes it.
+Verify the manifest hash yourself:
+
+```
+sha256sum protocol/v0.toml
+curl -s -X POST $ZALKANES_URL -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"zalkanes_getInfo","params":[]}'
+```
+
+Any change to a consensus constant changes this hash.
 
 ## Index
 
 | File | Purpose |
 |------|---------|
-| `scope.md` | What is and is not in scope |
-| `architecture.md` | System architecture (canonical: `docs/architecture.md`) |
-| `protocol-v0-frozen.md` | Wire format + consensus rules (canonical: `docs/protocol-v0.md`) |
-| `threat-model.md` | Threat model (canonical: `docs/threat-model/*`) |
-| `consensus-critical-files.md` | Every source file that can change consensus |
-| `dependency-lock.md` | Pinned dependencies (canonical: `docs/upstream-lock.md`) |
-| `known-assumptions.md` | Explicit assumptions |
-| `known-limitations.md` | Known limitations and un-enforced constants |
-| `test-summary.md` | Test coverage summary |
-| `fuzz-summary.md` | Fuzzing status |
-| `testnet-evidence.md` | Public-testnet acceptance evidence |
+| `SCOPE.md` | What is and is not in scope |
+| `ARCHITECTURE.md` | System architecture |
+| `PROTOCOL.md` | Wire format + consensus rules (canonical: `docs/protocol-v0.md`) |
+| `THREAT-MODEL.md` | Threat model (canonical: `docs/threat-model/*`) |
+| `CONSENSUS-CRITICAL-FILES.md` | Every source file that can change consensus |
+| `DEPENDENCIES.md` | Pinned dependencies (canonical: `docs/upstream-lock.md`) |
+| `ASSUMPTIONS.md` | Explicit trust assumptions |
+| `KNOWN-LIMITATIONS.md` | Known limitations and open items |
+| `TESTING.md` | Test coverage and what has/has not been run |
+| `FUZZING.md` | Fuzz campaign, findings, and fixes |
+| `STATE-ROOT.md` | Frozen root algorithm, vectors, determinism evidence |
+| `REORG.md` | Indexer + wallet reorg model and coverage |
+| `WALLET-PRIVACY.md` | Privacy boundary, key custody, authorization type-state |
+| `BUILD-REPRODUCIBILITY.md` | Pinned toolchain, two-clean-build gate, artifacts, SBOM |
+| `TESTNET-EVIDENCE.md` | Public-testnet acceptance history |
+| `LIVE-ACCEPTANCE-EVIDENCE.md` | Sanitized live transaction records (no secrets) |
+
+Operator-facing documentation: `docs/operator-guide.md`.
+
+## What an auditor should know up front
+
+1. **Zalkanes does not re-verify Zcash consensus.** It trusts the operator's
+   own Zebra node (pinned 6.3.0). A compromised or forked Zebra produces a
+   divergent index. See `ASSUMPTIONS.md`.
+2. **Contract interaction is public.** The ZALK message, deployed code, and
+   all contract state are cleartext on chain. Shielded wallet funding hides
+   only the source of funds. See `WALLET-PRIVACY.md`.
+3. **The state root is a flat sorted BLAKE2b hash, not a Merkle tree.** It
+   commits to contract code and storage only. See `STATE-ROOT.md`.
+4. **There is no cross-contract call in v0** (no `contract_call` host
+   function). `MAX_CALL_DEPTH` exists but is unreachable.
+5. **Two separate databases with no cross-store atomicity**: RocksDB
+   consensus state and the wallet SQLite store. Recovery never assumes they
+   moved together.
+6. **Known consensus divergences from older docs are documented, not hidden.**
+   Where an ADR and the implementation disagree, the audit document states
+   which is authoritative.
+
+## Evidence summary
+
+| area | status |
+|---|---|
+| Fuzzing | executed; 2 findings, both fixed with regression seeds; 0 unresolved (`FUZZING.md`) |
+| State-root vectors | 101 execution + 100 hashing + 5 protocol vectors, all consumed by tests |
+| Determinism | native aarch64-darwin, native x86_64-linux (CI), native aarch64-linux (CI), plus x86_64-darwin under Rosetta (labeled) |
+| Two-node equality | live public-testnet resync byte-identical at height 4,339,534; plus 100 deploys / 10,000 calls / 1,000 failures in isolated stores |
+| Crash/corruption | SIGKILL, interrupted rollback, read-only, truncated CURRENT, corrupt MANIFEST, real disk-full on an ext4 loopback in CI |
+| Live wallet acceptance | shielded CALLs, payload equality, shielded-funded deploy (`LIVE-ACCEPTANCE-EVIDENCE.md`) |
+| Reproducible builds | two-clean-build gate enforced in CI (`BUILD-REPRODUCIBILITY.md`) |
+| External audit | **NOT DONE — hard mainnet gate** |
 
 ## Status
 
-Protocol v0 is **FROZEN-RC** (release candidate `zalkanes-v0.1.0-rc1`). This
-package is the audit entry point for that candidate. It is **not**
-production-final: external audit + mainnet canary are still required before any
-mainnet activation (which remains `None`).
+This package is **not** production-final. External audit is a hard gate
+before any mainnet activation, which remains `None`. Open items are
+enumerated in `KNOWN-LIMITATIONS.md`; none are silently marked complete.

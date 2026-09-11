@@ -42,28 +42,37 @@ jobs:
           mkdir -p /tmp/zebra-regtest
           # Same activation heights as deploy/zebra/zebra-regtest.toml, so the
           # regtest chain runs the frozen NU6.3 rules the wallet targets.
-          # Byte-for-byte the same shape as deploy/zebra/zebra-regtest.toml
-          # (the known-good config), with ephemeral throwaway state.
-          cat > /tmp/zebra-regtest/zebrad.toml <<'EOF'
-          [network]
-          network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
-          listen_addr = "127.0.0.1:18233"
-
-          [state]
-          cache_dir = "/tmp/zebra-regtest/state"
-          ephemeral = true
-
-          [consensus]
-          checkpoint_sync = false
-
-          [rpc]
-          listen_addr = "127.0.0.1:18232"
-          enable_cookie_auth = false
-
-          [mining]
-          internal_miner = false
-          miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
-          EOF
+          # Version-robust: let zebrad generate its own canonical config, then
+          # patch ONLY the fields we need. (Hand-written configs broke twice on
+          # field-name drift between zebrad releases.)
+          zebrad generate -o /tmp/zebra-regtest/zebrad.toml
+          python3 - <<'PY'
+          import re
+          p = "/tmp/zebra-regtest/zebrad.toml"
+          s = open(p).read()
+          # Regtest with every upgrade active from height 1 (matches
+          # ConsensusParams::Regtest and deploy/zebra/zebra-regtest.toml).
+          s = re.sub(r'(?m)^network = .*$',
+                     'network = { regtest = true, params = { activation_heights = '
+                     '{ NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }',
+                     s, count=1)
+          s = re.sub(r'(?m)^listen_addr = "0\.0\.0\.0:8233".*$',
+                     'listen_addr = "127.0.0.1:18233"', s)
+          s = re.sub(r'(?m)^cache_dir = .*$', 'cache_dir = "/tmp/zebra-regtest/state"', s)
+          s = re.sub(r'(?m)^ephemeral = .*$', 'ephemeral = true', s)
+          s = re.sub(r'(?m)^checkpoint_sync = .*$', 'checkpoint_sync = false', s)
+          # RPC: bind loopback and disable cookie auth for the local indexer.
+          if '[rpc]' in s:
+              s = s.replace('[rpc]', '[rpc]\nlisten_addr = "127.0.0.1:18232"\nenable_cookie_auth = false', 1)
+          else:
+              s += '\n[rpc]\nlisten_addr = "127.0.0.1:18232"\nenable_cookie_auth = false\n'
+          if '[mining]' in s:
+              s = s.replace('[mining]', '[mining]\nminer_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"', 1)
+          else:
+              s += '\n[mining]\nminer_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"\n'
+          open(p, "w").write(s)
+          PY
+          echo "── effective zebrad config ──"; cat /tmp/zebra-regtest/zebrad.toml
           zebrad -c /tmp/zebra-regtest/zebrad.toml start > /tmp/zebrad.log 2>&1 &
           echo $! > /tmp/zebrad.pid
           # Wait for the RPC port to answer.
