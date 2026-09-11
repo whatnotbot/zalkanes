@@ -166,6 +166,7 @@ impl Journal {
         tip_hash: &str,
         target_height: u32,
         selected_inputs: &str,
+        expiry: Option<u32>,
     ) -> Result<()> {
         let tx = self
             .conn
@@ -176,7 +177,7 @@ impl Journal {
             "INSERT INTO operations
              (plan_id, intent_hash, kind, funding_mode, lock_owner, tip_height, tip_hash,
               target_height, selected_inputs, stage, txid, expiry, last_error, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'planned', NULL, NULL, NULL, ?10, ?10)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'planned', NULL, ?10, NULL, ?11, ?11)",
             params![
                 plan_id,
                 intent_hash,
@@ -187,6 +188,7 @@ impl Journal {
                 tip_hash,
                 target_height,
                 selected_inputs,
+                expiry,
                 now
             ],
         );
@@ -201,7 +203,7 @@ impl Journal {
                 let existing = tx
                     .query_row(
                         "SELECT intent_hash, kind, funding_mode, lock_owner, tip_height,
-                                tip_hash, target_height, selected_inputs
+                                tip_hash, target_height, selected_inputs, expiry
                          FROM operations WHERE plan_id = ?1",
                         params![plan_id],
                         |row| {
@@ -214,19 +216,31 @@ impl Journal {
                                 row.get::<_, String>(5)?,
                                 row.get::<_, i64>(6)?,
                                 row.get::<_, String>(7)?,
+                                row.get::<_, Option<i64>>(8)?,
                             ))
                         },
                     )
                     .map_err(|e| anyhow!("journal lookup {plan_id}: {e}"))?;
-                let (eh, ek, ef, el, eth, ethash, ett, esel) = existing;
+                let (eh, ek, ef, el, eth, ethash, ett, esel, eexp) = existing;
+                let eth = u32::try_from(eth)
+                    .map_err(|_| anyhow!("corrupt persisted tip_height for {plan_id}"))?;
+                let ett = u32::try_from(ett)
+                    .map_err(|_| anyhow!("corrupt persisted target_height for {plan_id}"))?;
+                let eexp: Option<u32> = eexp
+                    .map(|v| {
+                        u32::try_from(v)
+                            .map_err(|_| anyhow!("corrupt persisted expiry for {plan_id}"))
+                    })
+                    .transpose()?;
                 let same = eh == intent_hash
                     && ek == kind
                     && ef == funding_mode
                     && el == lock_owner
-                    && eth as u32 == tip_height
+                    && eth == tip_height
                     && ethash == tip_hash
-                    && ett as u32 == target_height
-                    && esel == selected_inputs;
+                    && ett == target_height
+                    && esel == selected_inputs
+                    && eexp == expiry;
                 if same {
                     // Idempotent: leave the existing operation untouched.
                     tx.commit().map_err(|e| anyhow!("journal commit: {e}"))?;
@@ -357,7 +371,16 @@ mod tests {
 
     fn begin(j: &mut Journal, id: &str) {
         j.create_plan(
-            id, "hash", "call", "shielded", "owner", 100, "aa", 101, "[]",
+            id,
+            "hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[]",
+            Some(120),
         )
         .unwrap();
         j.reserve(id).unwrap();
@@ -365,7 +388,16 @@ mod tests {
 
     fn create(j: &mut Journal, id: &str) {
         j.create_plan(
-            id, "hash", "call", "shielded", "owner", 100, "aa", 101, "[]",
+            id,
+            "hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[]",
+            Some(120),
         )
         .unwrap();
     }
@@ -495,6 +527,7 @@ mod tests {
             "aa",
             101,
             "[]",
+            Some(120),
         );
         assert!(r.is_err());
         assert_eq!(j.stage("p1").unwrap(), Some(JournalStage::Planned));
@@ -514,6 +547,64 @@ mod tests {
             "aa",
             101,
             "[different]",
+            Some(120),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn duplicate_create_plan_with_different_expiry_fails() {
+        let mut j = Journal::open_in_memory().unwrap();
+        j.create_plan(
+            "p1",
+            "hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[]",
+            Some(120),
+        )
+        .unwrap();
+        let r = j.create_plan(
+            "p1",
+            "hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[]",
+            Some(999),
+        );
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn corrupt_persisted_height_is_rejected() {
+        let mut j = Journal::open_in_memory().unwrap();
+        create(&mut j, "p1");
+        // Corrupt the persisted tip_height to a negative value.
+        j.conn
+            .execute(
+                "UPDATE operations SET tip_height = -1 WHERE plan_id = 'p1'",
+                [],
+            )
+            .unwrap();
+        let r = j.create_plan(
+            "p1",
+            "hash",
+            "call",
+            "shielded",
+            "owner",
+            100,
+            "aa",
+            101,
+            "[]",
+            Some(120),
         );
         assert!(r.is_err());
     }
