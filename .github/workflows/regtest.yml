@@ -133,6 +133,19 @@ jobs:
           "$BIN" wallet balance
           "$BIN" wallet status
 
+          echo "── diagnostic: the EXACT RPC the scanner issues ──"
+          # Classifies any scan failure definitively: if these succeed but the
+          # scanner fails, the fault is client-side; if these fail, it is the
+          # node/environment.
+          for h in 1 2 21; do
+            echo "getblockhash($h):"
+            rpc getblockhash "[$h]" | head -c 120; echo
+            echo "z_gettreestate(\"$h\"):"
+            rpc z_gettreestate "[\"$h\"]" | head -c 160; echo
+            echo "getblock(\"$h\", 0) first 120 chars:"
+            rpc getblock "[\"$h\", 0]" | head -c 120; echo
+          done
+
           echo "── scan real regtest blocks while LOCKED ──"
           "$BIN" wallet scan
 
