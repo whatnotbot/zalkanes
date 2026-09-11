@@ -111,6 +111,15 @@ transparent signature invalid under consensus. Testnet tip (2026-09-10) is
 
 ---
 
+## Serialization / utility (non-consensus)
+
+| Crate  | Version | Notes                                                              |
+|--------|---------|--------------------------------------------------------------------|
+| serde  | =1.0.220 | bumped from =1.0.210 so the `time` >=0.3.47 advisory fix (RUSTSEC-2026-0009, via `rusqlite`/`zcash_client_sqlite`) resolves; `time 0.3.47+` requires `serde_core` 1.0.220 |
+| time   | 0.3.55 (lock) | transitive (rusqlite); bumped to clear RUSTSEC-2026-0009 (RFC 2822 stack-exhaustion DoS) |
+
+---
+
 ## Protocol constants
 
 ```
