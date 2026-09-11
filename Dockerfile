@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY contracts ./contracts
+COPY protocol ./protocol
 
 # Build the CLI (release). Excludes wasm32 contract crates via default-members.
 RUN cargo build --release -p zalkanes-cli
