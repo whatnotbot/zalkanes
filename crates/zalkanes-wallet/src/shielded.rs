@@ -78,10 +78,14 @@ pub struct ShieldedSelection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SyncStatus {
     /// The canonical chain tip height as reported by our Zebra.
-    pub zebra_tip: u32,
+    pub zebra_tip_height: u32,
+    /// The canonical chain tip block hash as reported by our Zebra.
+    pub zebra_tip_hash: [u8; 32],
     /// The height the wallet has scanned through.
-    pub wallet_scan_tip: u32,
-    /// Whether shielded spending is safe (`wallet_scan_tip == zebra_tip`).
+    pub wallet_scan_height: u32,
+    /// The block hash the wallet recorded at its scan tip.
+    pub wallet_scan_hash: [u8; 32],
+    /// Whether shielded spending is safe (height AND hash both match).
     pub synced: bool,
     /// The anchor height a shielded spend would use, if any.
     pub anchor_height: Option<u32>,
@@ -94,9 +98,10 @@ pub struct SyncStatus {
 /// the wallet crate does not hard-code the SQLite store; see
 /// `crates/zalkanes-wallet/src/sqlite.rs`.
 pub trait ShieldedWallet {
-    /// Reports the wallet's scan tip against `zebra_tip` and whether shielded
-    /// spending is safe.
-    fn sync_status(&self, zebra_tip: u32) -> Result<SyncStatus>;
+    /// Reports the wallet's scan tip (height + hash) against the canonical
+    /// `tip`, and whether shielded spending is safe (both identity components
+    /// must match).
+    fn sync_status(&self, tip: crate::funding::CanonicalTip) -> Result<SyncStatus>;
 
     /// Select notes covering at least `required_zat`, atomically reserving them
     /// under a lock derived from `plan_id`, and return the spends, change
@@ -168,12 +173,6 @@ impl ShieldedFunding {
             op_return: op_return.to_vec(),
         };
         let plan_id = crate::plan::new_plan_id();
-        let intent_hash = crate::plan::intent_hash_of(
-            ctx.network.zebra_name(),
-            ctx.target_height,
-            "shielded",
-            &request,
-        );
 
         // Deterministic, bounded fee/change selection loop: transparent output
         // value is zero for CALL, so `selected = fee + change`.
@@ -193,6 +192,23 @@ impl ShieldedFunding {
             assemble_and_build(&params, target_height, &sel, &[], op_return, change)?;
 
         let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
+
+        let transparent_outputs = vec![crate::plan::PlanOutput {
+            value: 0,
+            script: zalkanes_tx::op_return_script(op_return),
+        }];
+        let intent_hash = commit_shielded(
+            ctx,
+            branch_id,
+            &sel,
+            fee,
+            change,
+            tx_version,
+            expiry_height,
+            transparent_outputs,
+            op_return,
+            2,
+        );
 
         Ok(crate::plan::FundingPlan::Shielded(Box::new(ShieldedPlan {
             stage: Stage::Planned,
@@ -239,12 +255,6 @@ impl ShieldedFunding {
             carrier_values: carrier_values.to_vec(),
         };
         let plan_id = crate::plan::new_plan_id();
-        let intent_hash = crate::plan::intent_hash_of(
-            ctx.network.zebra_name(),
-            ctx.target_height,
-            "shielded",
-            &request,
-        );
 
         let (sel, fee) = select_for(
             &*self.wallet,
@@ -267,6 +277,27 @@ impl ShieldedFunding {
 
         let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
 
+        let carrier_script = zalkanes_tx::p2sh_script_pubkey(&redeem);
+        let transparent_outputs: Vec<crate::plan::PlanOutput> = carrier_values
+            .iter()
+            .map(|v| crate::plan::PlanOutput {
+                value: *v,
+                script: carrier_script.clone(),
+            })
+            .collect();
+        let intent_hash = commit_shielded(
+            ctx,
+            branch_id,
+            &sel,
+            fee,
+            change,
+            tx_version,
+            expiry_height,
+            transparent_outputs,
+            &[],
+            0,
+        );
+
         Ok(crate::plan::FundingPlan::Shielded(Box::new(ShieldedPlan {
             stage: Stage::Planned,
             selected_value: sel.selected_value,
@@ -286,6 +317,65 @@ impl ShieldedFunding {
             intent_hash,
         })))
     }
+}
+
+/// Compute the canonical plan commitment for a shielded plan from its concrete
+/// assembled parts (post selection/fee/output assembly).
+#[allow(clippy::too_many_arguments)]
+fn commit_shielded(
+    ctx: &FundContext,
+    branch_id: BranchId,
+    sel: &ShieldedSelection,
+    fee: u64,
+    change: u64,
+    tx_version: &str,
+    expiry_height: u32,
+    transparent_outputs: Vec<crate::plan::PlanOutput>,
+    zalk_payload: &[u8],
+    kind: u8,
+) -> String {
+    let inputs: Vec<crate::plan::PlanInput> = sel
+        .spends
+        .iter()
+        .zip(&sel.output_refs)
+        .map(|(s, r)| crate::plan::PlanInput {
+            pool: match s.pool {
+                ValuePool::Orchard => 1,
+                ValuePool::Ironwood => 2,
+            },
+            txid: *r.txid().as_ref(),
+            output_index: r.output_index(),
+            value: s.value,
+        })
+        .collect();
+
+    let anchor_root = sel
+        .orchard_anchor
+        .map(|a| a.to_bytes())
+        .unwrap_or([0u8; 32]);
+    let tx_ver = if tx_version == "v6" { 6 } else { 5 };
+
+    crate::plan::commit_plan(
+        ctx.network.id_byte(),
+        0, // protocol version
+        1, // shielded pool
+        ctx.target_height,
+        &ctx.target_hash,
+        u32::from(branch_id),
+        tx_ver,
+        expiry_height,
+        &inputs,
+        ctx.target_height,
+        &anchor_root,
+        &transparent_outputs,
+        Some(&crate::plan::PlanChange {
+            value: change,
+            pool: 1,
+        }),
+        fee,
+        zalk_payload,
+        kind,
+    )
 }
 
 /// A prepared (unproven, unsigned) shielded plan.

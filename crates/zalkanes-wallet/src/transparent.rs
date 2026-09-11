@@ -80,16 +80,55 @@ impl FundingSource for TransparentFunding {
         }
         let prepared = self.build_plan(request)?;
         let plan_id = crate::plan::new_plan_id();
-        let intent_hash = crate::plan::intent_hash_of(
-            ctx.network.zebra_name(),
+        let branch_id = ctx.branch_id();
+
+        let inputs: Vec<crate::plan::PlanInput> = prepared
+            .inputs
+            .iter()
+            .map(|i| crate::plan::PlanInput {
+                pool: 0,
+                txid: *i.outpoint.hash(),
+                output_index: i.outpoint.n(),
+                value: i.value,
+            })
+            .collect();
+        let outputs: Vec<crate::plan::PlanOutput> = prepared
+            .outputs
+            .iter()
+            .map(|o| crate::plan::PlanOutput {
+                value: o.value,
+                script: o.script_pubkey.clone(),
+            })
+            .collect();
+        let zalk = request.op_return_payload().unwrap_or(&[]);
+        let kind = match request {
+            TxRequest::Prepare { .. } => 0,
+            TxRequest::Deploy { .. } => 1,
+            TxRequest::Call { .. } => 2,
+        };
+        let intent_hash = crate::plan::commit_plan(
+            ctx.network.id_byte(),
+            0, // protocol version
+            0, // transparent pool
             ctx.target_height,
-            "transparent",
-            request,
+            &ctx.target_hash,
+            u32::from(branch_id),
+            5, // tx version
+            0, // expiry
+            &inputs,
+            0,
+            &[0u8; 32],
+            &outputs,
+            None,
+            prepared.fee,
+            zalk,
+            kind,
         );
+
         Ok(FundingPlan::Transparent(Box::new(TransparentPlan {
             prepared,
             request: request.clone(),
-            branch_id: ctx.branch_id(),
+            branch_id,
             target_height: ctx.target_height,
             stage: Stage::Planned,
             signed: None,
@@ -108,6 +147,7 @@ mod tests {
         FundContext {
             network: Network::Regtest,
             target_height: 1,
+            target_hash: [0u8; 32],
         }
     }
 

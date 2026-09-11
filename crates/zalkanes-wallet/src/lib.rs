@@ -35,8 +35,10 @@ pub mod shielded;
 pub mod sqlite;
 pub mod transparent;
 
-pub use funding::{FundContext, FundingPool, FundingSource, FundingUtxo, TxRequest};
-pub use plan::{FundingPlan, Stage, TransparentPlan};
+pub use funding::{CanonicalTip, FundContext, FundingPool, FundingSource, FundingUtxo, TxRequest};
+pub use plan::{
+    commit_plan, FundingPlan, PlanChange, PlanInput, PlanOutput, Stage, TransparentPlan,
+};
 pub use policy::PrivacyPolicy;
 pub use transparent::TransparentFunding;
 

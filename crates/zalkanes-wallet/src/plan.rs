@@ -25,47 +25,100 @@ pub fn new_plan_id() -> String {
     hex::encode(bytes)
 }
 
-/// A SHA-256 hash of the immutable transaction intent: the parts of the request
-/// that must not change between `plan()` and `extract()`.
-pub fn intent_hash_of(
-    network: &str,
+/// An exact selected input, for the plan commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanInput {
+    /// 0 = transparent, 1 = Orchard, 2 = Ironwood.
+    pub pool: u8,
+    /// The input's stable identity (outpoint txid / note-creating txid).
+    pub txid: [u8; 32],
+    pub output_index: u32,
+    pub value: u64,
+}
+
+/// An exact transparent output, for the plan commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanOutput {
+    pub value: u64,
+    pub script: Vec<u8>,
+}
+
+/// The exact shielded change, for the plan commitment.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlanChange {
+    pub value: u64,
+    pub pool: u8,
+}
+
+/// The canonical, domain-separated binary plan commitment (a SHA-256 over a
+/// length-prefixed encoding of the *concrete* assembled plan, not the logical
+/// request). Integer widths and byte order are fixed; every variable-length
+/// field is length-prefixed.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_plan(
+    network_id: u8,
+    protocol_version: u8,
+    pool: u8,
     target_height: u32,
-    pool: &str,
-    request: &TxRequest,
+    target_hash: &[u8; 32],
+    branch_id: u32,
+    tx_version: u8,
+    expiry_height: u32,
+    inputs: &[PlanInput],
+    anchor_height: u32,
+    anchor_root: &[u8; 32],
+    transparent_outputs: &[PlanOutput],
+    shielded_change: Option<&PlanChange>,
+    fee: u64,
+    zalk_payload: &[u8],
+    kind: u8,
 ) -> String {
-    let mut h = Sha256::new();
-    h.update(b"zalkanes-plan-v1\0");
-    h.update(network.as_bytes());
-    h.update(target_height.to_le_bytes());
-    h.update(pool.as_bytes());
-    match request {
-        TxRequest::Prepare { carrier_values } => {
-            h.update(b"prepare");
-            for v in carrier_values {
-                h.update(v.to_le_bytes());
-            }
-        }
-        TxRequest::Deploy {
-            chunks,
-            carrier_values,
-            op_return,
-            ..
-        } => {
-            h.update(b"deploy");
-            h.update(op_return);
-            for v in carrier_values {
-                h.update(v.to_le_bytes());
-            }
-            for c in chunks {
-                h.update((c.len() as u64).to_le_bytes());
-            }
-        }
-        TxRequest::Call { op_return } => {
-            h.update(b"call");
-            h.update(op_return);
-        }
+    let mut buf = Vec::with_capacity(256);
+    buf.extend_from_slice(b"ZALKANES_FUNDING_PLAN_V1\x00");
+    buf.push(network_id);
+    buf.push(protocol_version);
+    buf.push(pool);
+    buf.extend_from_slice(&target_height.to_le_bytes());
+    buf.extend_from_slice(target_hash);
+    buf.extend_from_slice(&branch_id.to_le_bytes());
+    buf.push(tx_version);
+    buf.extend_from_slice(&expiry_height.to_le_bytes());
+
+    buf.extend_from_slice(&(inputs.len() as u16).to_le_bytes());
+    for i in inputs {
+        buf.push(i.pool);
+        buf.extend_from_slice(&i.txid);
+        buf.extend_from_slice(&i.output_index.to_le_bytes());
+        buf.extend_from_slice(&i.value.to_le_bytes());
     }
-    hex::encode(h.finalize())
+
+    buf.extend_from_slice(&anchor_height.to_le_bytes());
+    buf.extend_from_slice(anchor_root);
+
+    buf.extend_from_slice(&(transparent_outputs.len() as u16).to_le_bytes());
+    for o in transparent_outputs {
+        buf.extend_from_slice(&o.value.to_le_bytes());
+        buf.extend_from_slice(&(o.script.len() as u16).to_le_bytes());
+        buf.extend_from_slice(&o.script);
+    }
+
+    match shielded_change {
+        Some(c) => {
+            buf.push(1);
+            buf.extend_from_slice(&c.value.to_le_bytes());
+            buf.push(c.pool);
+        }
+        None => buf.push(0),
+    }
+
+    buf.extend_from_slice(&fee.to_le_bytes());
+
+    buf.extend_from_slice(&(zalk_payload.len() as u16).to_le_bytes());
+    buf.extend_from_slice(zalk_payload);
+
+    buf.push(kind);
+
+    hex::encode(Sha256::digest(&buf))
 }
 
 /// Authorization stage of a [`FundingPlan`].
@@ -380,4 +433,403 @@ fn zat_to_zec(zat: u64) -> String {
     let whole = zat / 100_000_000;
     let frac = zat % 100_000_000;
     format!("{whole}.{frac:08}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base() -> String {
+        commit_plan(
+            2,          // network id
+            0,          // protocol version
+            1,          // shielded pool
+            100,        // target height
+            &[1u8; 32], // target hash
+            0x1234,     // branch id
+            6,          // tx version
+            120,        // expiry height
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32], // anchor root
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00], // ZALK payload
+            2,             // CALL
+        )
+    }
+
+    #[test]
+    fn identical_serialization_produces_identical_hash() {
+        assert_eq!(base(), base());
+    }
+
+    #[test]
+    fn any_field_mutation_changes_hash() {
+        let b = base();
+
+        // network id
+        let h = commit_plan(
+            3,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // note (input identity)
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [9u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // input value
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_001,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // fee
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_001,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // change
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_001,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // ZALK byte
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x01],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // carrier/output
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 1,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // target block hash
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[7u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // anchor root
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[8u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // expiry height
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            6,
+            121,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+
+        // tx version
+        let h = commit_plan(
+            2,
+            0,
+            1,
+            100,
+            &[1u8; 32],
+            0x1234,
+            5,
+            120,
+            &[PlanInput {
+                pool: 1,
+                txid: [2u8; 32],
+                output_index: 0,
+                value: 50_000,
+            }],
+            100,
+            &[3u8; 32],
+            &[PlanOutput {
+                value: 0,
+                script: vec![0x6a, 0x02, 0x02, 0x00],
+            }],
+            Some(&PlanChange {
+                value: 40_000,
+                pool: 1,
+            }),
+            10_000,
+            &[0x02, 0x00],
+            2,
+        );
+        assert_ne!(b, h);
+    }
 }

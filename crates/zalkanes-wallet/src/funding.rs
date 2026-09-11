@@ -73,6 +73,14 @@ impl TxRequest {
     }
 }
 
+/// The canonical chain identity a wallet plan is pinned to: a height **and** a
+/// block hash. A same-height reorg is detectable only by comparing the hash.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CanonicalTip {
+    pub height: u32,
+    pub hash: [u8; 32],
+}
+
 /// Per-transaction context shared by every funding source.
 #[derive(Clone, Copy, Debug)]
 pub struct FundContext {
@@ -80,9 +88,19 @@ pub struct FundContext {
     pub network: Network,
     /// Target height, used to resolve the consensus branch id for signing.
     pub target_height: u32,
+    /// The canonical tip (height + block hash) the plan is pinned to.
+    pub target_hash: [u8; 32],
 }
 
 impl FundContext {
+    /// The canonical tip this context is pinned to.
+    pub fn canonical_tip(&self) -> CanonicalTip {
+        CanonicalTip {
+            height: self.target_height,
+            hash: self.target_hash,
+        }
+    }
+
     /// The consensus branch id active at [`Self::target_height`].
     pub fn branch_id(&self) -> BranchId {
         zalkanes_core::branch_id_for_height(self.network, self.target_height)

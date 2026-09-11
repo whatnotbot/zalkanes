@@ -54,6 +54,7 @@ pub struct SqliteShieldedWallet {
     orchard_fvk: FullViewingKey,
     orchard_ask: SpendAuthorizingKey,
     zebra_tip: Cell<u32>,
+    zebra_tip_hash: Cell<[u8; 32]>,
 }
 
 impl SqliteShieldedWallet {
@@ -110,12 +111,14 @@ impl SqliteShieldedWallet {
             orchard_fvk,
             orchard_ask,
             zebra_tip: Cell::new(0),
+            zebra_tip_hash: Cell::new([0u8; 32]),
         })
     }
 
-    /// Update the canonical Zebra tip this wallet plans against.
-    pub fn set_zebra_tip(&self, tip: u32) {
-        self.zebra_tip.set(tip);
+    /// Update the canonical Zebra tip (height + hash) this wallet plans against.
+    pub fn set_canonical_tip(&self, tip: crate::funding::CanonicalTip) {
+        self.zebra_tip.set(tip.height);
+        self.zebra_tip_hash.set(tip.hash);
     }
 
     pub fn account_id(&self) -> AccountUuid {
@@ -137,13 +140,22 @@ impl SqliteShieldedWallet {
         Ok(UnifiedAddress::encode(&ua, db.params()))
     }
 
-    /// Wallet scan tip height, or 0 if the wallet has never scanned.
-    fn wallet_scan_tip(&self) -> Result<u32> {
+    /// Wallet scan tip (height + hash), or (0, [0;32]) if never scanned.
+    fn wallet_scan_tip(&self) -> Result<(u32, [u8; 32])> {
         let db = self.db.borrow();
         let summary = db
             .get_wallet_summary(ConfirmationsPolicy::MIN)
             .map_err(|e| anyhow!("wallet summary: {e}"))?;
-        Ok(summary.map_or(0, |s| u32::from(s.chain_tip_height())))
+        let height = summary.map_or(0, |s| u32::from(s.chain_tip_height()));
+        if height == 0 {
+            return Ok((0, [0u8; 32]));
+        }
+        let hash = db
+            .get_block_hash(BlockHeight::from_u32(height))
+            .map_err(|e| anyhow!("wallet block hash: {e}"))?
+            .map(|h| h.0)
+            .unwrap_or([0u8; 32]);
+        Ok((height, hash))
     }
 
     /// The account's spendable balance (all pools), in zat.
@@ -173,28 +185,39 @@ impl SqliteShieldedWallet {
 }
 
 impl ShieldedWallet for SqliteShieldedWallet {
-    fn sync_status(&self, zebra_tip: u32) -> Result<SyncStatus> {
-        let scan_tip = self.wallet_scan_tip()?;
-        let synced = scan_tip == zebra_tip;
+    fn sync_status(&self, tip: crate::funding::CanonicalTip) -> Result<SyncStatus> {
+        let (scan_height, scan_hash) = self.wallet_scan_tip()?;
+        // Spending is safe only when height AND hash both match the canonical
+        // chain identity (a same-height reorg changes the hash).
+        let synced = scan_height == tip.height && scan_hash == tip.hash;
         Ok(SyncStatus {
-            zebra_tip,
-            wallet_scan_tip: scan_tip,
+            zebra_tip_height: tip.height,
+            zebra_tip_hash: tip.hash,
+            wallet_scan_height: scan_height,
+            wallet_scan_hash: scan_hash,
             synced,
-            anchor_height: if synced { Some(zebra_tip) } else { None },
+            anchor_height: if synced { Some(tip.height) } else { None },
         })
     }
 
     fn select_spends(&self, required_zat: u64, plan_id: &str) -> Result<ShieldedSelection> {
         let zebra_tip = self.zebra_tip.get();
+        let zebra_tip_hash = self.zebra_tip_hash.get();
         if zebra_tip == 0 {
             bail!("zebra tip unknown; run sync before planning");
         }
-        let status = self.sync_status(zebra_tip)?;
+        let status = self.sync_status(crate::funding::CanonicalTip {
+            height: zebra_tip,
+            hash: zebra_tip_hash,
+        })?;
         if !status.synced {
             bail!(
-                "shielded wallet not synced (zebra tip {zebra_tip}, wallet scan tip {}); \
+                "shielded wallet not synced (zebra {}:{}, wallet {}:{}); \
                  refuse to plan from stale witness state",
-                status.wallet_scan_tip
+                status.zebra_tip_height,
+                hex::encode(status.zebra_tip_hash),
+                status.wallet_scan_height,
+                hex::encode(status.wallet_scan_hash),
             );
         }
 
@@ -357,9 +380,14 @@ mod tests {
         // A freshly created, never-scanned wallet has no spendable balance.
         assert_eq!(wallet.balance().unwrap(), 0);
         // Without a Zebra tip, sync must report unsynced.
-        let status = wallet.sync_status(1_000).unwrap();
+        let status = wallet
+            .sync_status(crate::funding::CanonicalTip {
+                height: 1_000,
+                hash: [0u8; 32],
+            })
+            .unwrap();
         assert!(!status.synced);
-        assert_eq!(status.wallet_scan_tip, 0);
+        assert_eq!(status.wallet_scan_height, 0);
 
         drop(wallet);
         let _ = std::fs::remove_file(&path);
