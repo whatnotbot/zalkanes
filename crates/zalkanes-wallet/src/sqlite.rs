@@ -335,6 +335,25 @@ impl SqliteShieldedWallet {
         }
     }
 
+    /// A one-line summary of the wallet's unspent shielded notes by pool.
+    pub fn shielded_note_summary(&self) -> Result<String> {
+        let mut db = self.db.borrow_mut();
+        let notes = db
+            .select_unspent_notes(
+                self.account_id,
+                &[ShieldedPool::Orchard, ShieldedPool::Ironwood],
+                TargetHeight::from(BlockHeight::from_u32(self.zebra_tip.get())),
+                &[],
+                LockFilter::Policy(&LockedInputPolicy::Exclude),
+            )
+            .map_err(|e| anyhow!("unspent notes: {e:?}"))?;
+        Ok(format!(
+            "orchard_notes={} ironwood_notes={}",
+            notes.orchard().len(),
+            notes.ironwood().len()
+        ))
+    }
+
     /// The account's spendable balance (all pools), in zat.
     pub fn balance(&self) -> Result<u64> {
         let db = self.db.borrow();

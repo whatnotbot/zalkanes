@@ -57,6 +57,7 @@ fn main() -> Result<()> {
         wallet.balance()?,
         wallet.balance()? as f64 / 1e8
     );
+    println!("notes:    {}", wallet.shielded_note_summary()?);
     Ok(())
 }
 
