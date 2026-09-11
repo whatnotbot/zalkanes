@@ -8,10 +8,11 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use rand_core::{OsRng, RngCore};
 use sha2::{Digest, Sha256};
 use zalkanes_tx::SignedTx;
+use zcash_primitives::transaction::{Transaction, TxVersion};
 use zcash_protocol::consensus::BranchId;
 
 use crate::funding::{CanonicalTip, TxRequest};
@@ -395,6 +396,36 @@ impl FundingPlan {
             FundingPlan::Shielded(p) => p.extract(),
         }
     }
+
+    /// Extract and structurally verify the final transaction against this plan.
+    /// Returns a [`VerifiedTransaction`], the only type broadcast APIs accept.
+    pub fn extract_verified(&mut self, current_tip: CanonicalTip) -> Result<VerifiedTransaction> {
+        let tx = self.extract(current_tip)?;
+        self.verify_extracted(&tx)?;
+        Ok(VerifiedTransaction {
+            signed: tx,
+            plan_id: self.plan_id().to_string(),
+            intent_hash: self.intent_hash().to_string(),
+        })
+    }
+
+    /// Structurally compare an extracted transaction against this plan. Any
+    /// mismatch is fatal; the transaction must never be repaired.
+    pub(crate) fn verify_extracted(&self, tx: &SignedTx) -> Result<()> {
+        match self {
+            FundingPlan::Transparent(p) => p.verify_extracted(tx),
+            #[cfg(feature = "shielded")]
+            FundingPlan::Shielded(p) => p.verify_extracted(tx),
+        }
+    }
+}
+
+/// A transaction that has been structurally verified against its [`FundingPlan`].
+/// Broadcast-capable APIs accept only this type — never a raw transaction.
+pub struct VerifiedTransaction {
+    pub signed: SignedTx,
+    pub plan_id: String,
+    pub intent_hash: String,
 }
 
 /// The separate Zalkanes disclosure, distinct from Zallet's privacy-policy
@@ -482,6 +513,79 @@ impl TransparentPlan {
                 expected
             );
         }
+        Ok(())
+    }
+
+    /// Structural verification for a transparent-funded transaction: the
+    /// extracted transaction's transparent inputs, outputs, fee, version, and
+    /// expiry must exactly match the plan.
+    pub(crate) fn verify_extracted(&self, tx: &SignedTx) -> Result<()> {
+        let parsed = Transaction::read(&mut &tx.bytes[..], self.branch_id)
+            .map_err(|e| anyhow!("parse extracted tx: {e}"))?;
+
+        if parsed.version() != TxVersion::V5 {
+            bail!(
+                "tx version mismatch: got {:?}, expected V5",
+                parsed.version()
+            );
+        }
+        if u32::from(parsed.expiry_height()) != 0 {
+            bail!(
+                "tx expiry mismatch: got {}, expected 0",
+                u32::from(parsed.expiry_height())
+            );
+        }
+
+        let bundle = parsed
+            .transparent_bundle()
+            .ok_or_else(|| anyhow!("extracted tx has no transparent bundle"))?;
+
+        // Exact transparent inputs (prevouts), in order.
+        if bundle.vin.len() != self.prepared.inputs.len() {
+            bail!(
+                "input count mismatch: {} vs {}",
+                bundle.vin.len(),
+                self.prepared.inputs.len()
+            );
+        }
+        for (i, (vin, plan_in)) in bundle.vin.iter().zip(&self.prepared.inputs).enumerate() {
+            if vin.prevout().hash() != plan_in.outpoint.hash()
+                || vin.prevout().n() != plan_in.outpoint.n()
+            {
+                bail!("input {i} prevout mismatch");
+            }
+        }
+
+        // Exact transparent outputs (value + scriptPubKey), in order.
+        if bundle.vout.len() != self.prepared.outputs.len() {
+            bail!(
+                "output count mismatch: {} vs {}",
+                bundle.vout.len(),
+                self.prepared.outputs.len()
+            );
+        }
+        for (i, (vout, plan_out)) in bundle.vout.iter().zip(&self.prepared.outputs).enumerate() {
+            if u64::from(vout.value()) != plan_out.value {
+                bail!("output {i} value mismatch");
+            }
+            if vout.script_pubkey().0 .0.as_slice() != plan_out.script_pubkey.as_slice() {
+                bail!("output {i} script mismatch");
+            }
+        }
+
+        // Fee via canonical value accounting (inputs - outputs).
+        let in_sum: u64 = self.prepared.inputs.iter().map(|i| i.value).sum();
+        let out_sum: u64 = self.prepared.outputs.iter().map(|o| o.value).sum();
+        let actual_fee = in_sum
+            .checked_sub(out_sum)
+            .ok_or_else(|| anyhow!("negative fee"))?;
+        if actual_fee != self.prepared.fee {
+            bail!(
+                "fee mismatch: extracted {actual_fee}, planned {}",
+                self.prepared.fee
+            );
+        }
+
         Ok(())
     }
 }

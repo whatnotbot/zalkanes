@@ -7,6 +7,7 @@ license.workspace = true
 [dependencies]
 zalkanes-core     = { workspace = true }
 zalkanes-tx       = { workspace = true }
+zcash_primitives  = { workspace = true }
 anyhow            = { workspace = true }
 thiserror         = { workspace = true }
 hex               = { workspace = true }
@@ -16,7 +17,6 @@ rand_core         = { version = "=0.6.4", features = ["getrandom"] }
 
 # Shielded funding (Orchard/Ironwood) via the lower-level PCZT pipeline.
 pczt                 = { workspace = true, optional = true }
-zcash_primitives     = { workspace = true, optional = true }
 zcash_client_backend = { workspace = true, optional = true }
 zcash_client_sqlite  = { workspace = true, optional = true }
 zcash_proofs         = { workspace = true, optional = true }
@@ -38,7 +38,6 @@ default = []
 # the consensus path stays lightweight and the CI matrix stays green without it.
 shielded = [
     "dep:pczt",
-    "dep:zcash_primitives",
     "dep:zcash_client_backend",
     "dep:zcash_client_sqlite",
     "dep:zcash_proofs",
@@ -52,7 +51,7 @@ shielded = [
     "dep:reqwest",
     "dep:serde_json",
     "dep:serde",
-    "zcash_primitives?/circuits",
+    "zcash_primitives/circuits",
 ]
 
 [dev-dependencies]

@@ -283,4 +283,54 @@ mod tests {
         };
         assert!(f.plan(&req, &ctx()).is_err());
     }
+
+    #[test]
+    fn extracted_transaction_verifies_and_mismatch_is_rejected() {
+        let f = funding();
+        let plan_a = || {
+            f.plan(
+                &TxRequest::Call {
+                    op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02],
+                },
+                &ctx(),
+            )
+            .unwrap()
+        };
+        let plan_b = || {
+            f.plan(
+                &TxRequest::Call {
+                    op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x03],
+                },
+                &ctx(),
+            )
+            .unwrap()
+        };
+
+        let mut a = plan_a();
+        a.prove(tip()).unwrap();
+        a.sign(tip()).unwrap();
+        let tx_a = a.extract(tip()).unwrap();
+        // Positive: the correct plan verifies against its own extracted tx.
+        a.verify_extracted(&tx_a).unwrap();
+
+        let mut b = plan_b();
+        b.prove(tip()).unwrap();
+        b.sign(tip()).unwrap();
+        let tx_b = b.extract(tip()).unwrap();
+
+        // Negative: a transaction with a different ZALK payload is rejected.
+        assert!(a.verify_extracted(&tx_b).is_err());
+
+        // Negative: a transaction with a different (tampered) payload fails the
+        // structural check when byte-level mutated.
+        let mut tampered = tx_a.bytes.clone();
+        // Flip the last byte (part of the change output script/value region).
+        let last = tampered.len() - 1;
+        tampered[last] ^= 0xff;
+        let tampered_tx = zalkanes_tx::SignedTx {
+            bytes: tampered,
+            txid: tx_a.txid,
+        };
+        assert!(a.verify_extracted(&tampered_tx).is_err());
+    }
 }

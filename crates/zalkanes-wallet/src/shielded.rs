@@ -492,6 +492,73 @@ impl ShieldedPlan {
         Ok(())
     }
 
+    /// Structural verification for a shielded-funded transaction. This verifies
+    /// the observable transparent portion (no transparent funding input for CALL,
+    /// the exact ZALK OP_RETURN output, version, expiry, fee) against the plan.
+    /// The shielded bundle's exact spends/change are committed in the plan
+    /// intent hash and validated by the canonical PCZT pipeline; they are not
+    /// re-parsed here (encrypted representation prevents recovering local-wallet
+    /// note identifiers from the final transaction without shielded parsing).
+    pub(crate) fn verify_extracted(&self, tx: &SignedTx) -> Result<()> {
+        use zcash_primitives::transaction::{Transaction, TxVersion};
+        let parsed = Transaction::read(&mut &tx.bytes[..], self.branch_id)
+            .map_err(|e| anyhow!("parse extracted tx: {e}"))?;
+
+        let expected_version = if self.tx_version == "v6" {
+            TxVersion::V6
+        } else {
+            TxVersion::V5
+        };
+        if parsed.version() != expected_version {
+            bail!(
+                "tx version mismatch: got {:?}, expected {}",
+                parsed.version(),
+                self.tx_version
+            );
+        }
+        if u32::from(parsed.expiry_height()) != self.expiry_height {
+            bail!(
+                "tx expiry mismatch: got {}, expected {}",
+                u32::from(parsed.expiry_height()),
+                self.expiry_height
+            );
+        }
+
+        let bundle = parsed
+            .transparent_bundle()
+            .ok_or_else(|| anyhow!("extracted tx has no transparent bundle"))?;
+
+        // A shielded CALL must have no transparent funding input.
+        if matches!(self.request, TxRequest::Call { .. }) && !bundle.vin.is_empty() {
+            bail!(
+                "shielded CALL has {} transparent funding input(s)",
+                bundle.vin.len()
+            );
+        }
+
+        // The only value-bearing transparent outputs are the planned ones (the
+        // ZALK OP_RETURN is zero-value; PREPARE has the carrier outputs).
+        for (i, vout) in bundle.vout.iter().enumerate() {
+            if u64::from(vout.value()) != 0 && !matches!(self.request, TxRequest::Prepare { .. }) {
+                bail!("unexpected value-bearing transparent output {i}");
+            }
+        }
+
+        // The ZALK OP_RETURN output must be present and exact for CALL/DEPLOY.
+        if let Some(payload) = self.request.op_return_payload() {
+            let script = zalkanes_tx::op_return_script(payload);
+            let found = bundle
+                .vout
+                .iter()
+                .any(|vout| vout.script_pubkey().0 .0.as_slice() == script.as_slice());
+            if !found {
+                bail!("ZALK OP_RETURN output missing or mutated");
+            }
+        }
+
+        Ok(())
+    }
+
     pub(crate) fn prove(&mut self) -> Result<()> {
         self.expect_stage(Stage::Planned)?;
         let pczt = self
