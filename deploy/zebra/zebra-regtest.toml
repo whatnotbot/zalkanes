@@ -1,6 +1,13 @@
-# Zebra regtest configuration for Zalkanes
+# Zebra regtest configuration for Zalkanes.
+#
+# Regtest activates every supported network upgrade (NU5..NU6.3) from height 1
+# so that V5/ZIP-244 transactions (and later V6/Ironwood) are valid from
+# genesis. This matches Zalkanes' `ConsensusParams::Regtest` ("all upgrades
+# active from height 1"). No funding streams are configured (empty), so the
+# coinbase goes entirely to the miner address.
+
 [network]
-network = "Regtest"
+network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
 listen_addr = "0.0.0.0:18233"
 
 [state]
