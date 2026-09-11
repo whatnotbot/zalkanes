@@ -5,6 +5,41 @@
 //! through the explicit stages [`FundingPlan::prove`], [`FundingPlan::sign`],
 //! and [`FundingPlan::extract`], so a caller can `--dry-run` inspect everything
 //! before generating a single proof or signature.
+//!
+//! # Two-stage verification guarantees
+//!
+//! **PLANNING** commits, in the plan intent hash and in recorded
+//! expectations: the exact intended note(s)/UTXO(s) (identity + value), the
+//! exact pool-tagged anchors, the exact transparent output vector, the exact
+//! shielded change (pool, value, canonical destination bytes), the exact fee,
+//! and the exact expiry + canonical chain tip (height AND hash).
+//!
+//! **[`crate::shielded::VerifiedPczt`]** (shielded plans): the finalized
+//! PCZT's authorization structure exactly matches the plan for every field
+//! that cannot safely be reconstructed after extraction — per-pool action
+//! counts, bundle pool identity, anchors, planned-spend nullifiers and note
+//! values at their exact action indices, dummy status of every other spend,
+//! change recipient/value plaintext, the change note commitment (cmx), a
+//! canonical trial decryption of the change ciphertext with our own viewing
+//! key, per-pool value balances, and the exact transparent output vector.
+//! Only [`crate::shielded::ShieldedPlan::verify_finalized_pczt`] can
+//! construct it, and production extraction accepts only it.
+//!
+//! **[`VerifiedTransaction`]**: the final serialization's version, expiry,
+//! transparent inputs (exact prevouts) and outputs (value + script),
+//! scriptSig contents (chunk index/bytes, redeem script, funding pubkey,
+//! DEPLOY byte-stream reconstruction), observable shielded bundle data
+//! (anchors, planned nullifiers, per-pool value balances, the verified change
+//! cmx), and the ACTUAL fee via canonical value accounting all match the
+//! plan. Broadcast-capable APIs accept only this type.
+//!
+//! Honest scope note: after extraction the change destination exists only in
+//! encrypted form. Destination plaintext is verified at the [`VerifiedPczt`]
+//! boundary; across extraction it stays bound through the verified change cmx
+//! (effecting data committed by the txid). No post-extract plaintext
+//! destination check is claimed.
+//!
+//! [`VerifiedPczt`]: crate::shielded::VerifiedPczt
 
 #![forbid(unsafe_code)]
 

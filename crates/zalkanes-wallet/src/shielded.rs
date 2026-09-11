@@ -37,6 +37,66 @@ use crate::funding::{FundContext, FundingSource, TxRequest};
 use crate::plan::Stage;
 use crate::policy::PrivacyPolicy;
 
+/// One planned shielded spend, as the finalized PCZT must realize it: the
+/// exact action index (from the builder's [`BundleMetadata`]), the exact
+/// nullifier (derived at plan time via `note.nullifier(&fvk)`), and the exact
+/// note value.
+#[derive(Clone)]
+pub(crate) struct ExpectedSpend {
+    pub(crate) pool: ValuePool,
+    pub(crate) action_index: usize,
+    pub(crate) nullifier: [u8; 32],
+    pub(crate) value: u64,
+}
+
+/// The planned shielded change output, as the finalized PCZT must realize it.
+#[derive(Clone)]
+pub(crate) struct ExpectedChange {
+    pub(crate) pool: ValuePool,
+    pub(crate) action_index: usize,
+    pub(crate) value: u64,
+    /// Canonical raw receiver bytes of the change address.
+    pub(crate) address_bytes: [u8; 43],
+    /// Internal-scope incoming viewing key, used to trial-decrypt the change
+    /// output ciphertext with the canonical library (no custom note crypto).
+    pub(crate) ivk: orchard::keys::IncomingViewingKey,
+}
+
+/// Everything the plan expects of the finalized PCZT, recorded at PLAN time
+/// from the committed selection — never re-derived from the object under
+/// verification.
+#[derive(Clone)]
+pub(crate) struct ShieldedExpectations {
+    pub(crate) spends: Vec<ExpectedSpend>,
+    pub(crate) change: ExpectedChange,
+    /// Exact action counts per pool in the built transaction (spend/output
+    /// padding included), so extra actions cannot be smuggled in.
+    pub(crate) actions_orchard: usize,
+    pub(crate) actions_ironwood: usize,
+    /// The anchor roots handed to the builder, per pool (None = pool absent).
+    pub(crate) anchor_orchard: Option<[u8; 32]>,
+    pub(crate) anchor_ironwood: Option<[u8; 32]>,
+    /// Expected per-pool net value (spends − outputs), zat: the value-balance
+    /// each pool's bundle must carry in the final transaction.
+    pub(crate) net_orchard: i64,
+    pub(crate) net_ironwood: i64,
+}
+
+/// A finalized PCZT that has passed exact plan-vs-PCZT verification
+/// ([`ShieldedPlan::verify_finalized_pczt`]).
+///
+/// Type-state boundary: all fields are private and there is no public or
+/// unchecked constructor, so an arbitrary finalized PCZT cannot enter the
+/// production extractor — only the verification path can produce this type,
+/// and production extraction accepts only this type.
+pub struct VerifiedPczt {
+    pczt: pczt::Pczt,
+    /// The verified change output's extracted note commitment (cmx). cmx is
+    /// effecting data in the final transaction, so this re-binds the verified
+    /// change output across extraction.
+    change_cmx: [u8; 32],
+}
+
 /// ZIP-317 minimum fee (two grace actions × 5000 zat).
 const MINIMUM_FEE: u64 = 10_000;
 /// Maximum number of note-selection rounds before we refuse to converge.
@@ -193,6 +253,7 @@ impl ShieldedFunding {
             assemble_and_build(&params, target_height, &sel, &[], op_return, change)?;
 
         let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
+        let expected = build_expectations(&sel, &orchard_meta, &ironwood_meta, &pczt, change)?;
 
         let transparent_outputs = vec![crate::plan::PlanOutput {
             value: 0,
@@ -217,6 +278,7 @@ impl ShieldedFunding {
             fee,
             change,
             change_destination: sel.change_address.to_raw_address_bytes().to_vec(),
+            change_pool: pool_tag(sel.change_pool),
             branch_id,
             target_height: ctx.target_height,
             canonical_tip: ctx.canonical_tip(),
@@ -227,6 +289,8 @@ impl ShieldedFunding {
             pczt: Some(pczt),
             orchard_sign,
             ironwood_sign,
+            expected,
+            expected_change_cmx: None,
             circuit_version: circuit_version(branch_id)?,
             signed: None,
             plan_id,
@@ -280,6 +344,7 @@ impl ShieldedFunding {
             assemble_and_build(&params, target_height, &sel, &carriers, &[], change)?;
 
         let (orchard_sign, ironwood_sign) = signing_plans(&sel, &orchard_meta, &ironwood_meta)?;
+        let expected = build_expectations(&sel, &orchard_meta, &ironwood_meta, &pczt, change)?;
 
         let carrier_script = zalkanes_tx::p2sh_script_pubkey(&redeem);
         let transparent_outputs: Vec<crate::plan::PlanOutput> = carrier_values
@@ -308,6 +373,7 @@ impl ShieldedFunding {
             fee,
             change,
             change_destination: sel.change_address.to_raw_address_bytes().to_vec(),
+            change_pool: pool_tag(sel.change_pool),
             branch_id,
             target_height: ctx.target_height,
             canonical_tip: ctx.canonical_tip(),
@@ -318,12 +384,90 @@ impl ShieldedFunding {
             pczt: Some(pczt),
             orchard_sign,
             ironwood_sign,
+            expected,
+            expected_change_cmx: None,
             circuit_version: circuit_version(branch_id)?,
             signed: None,
             plan_id,
             intent_hash,
         })))
     }
+}
+
+/// Pool tag byte as committed in the plan intent hash (1 = Orchard,
+/// 2 = Ironwood).
+fn pool_tag(pool: ValuePool) -> u8 {
+    match pool {
+        ValuePool::Orchard => 1,
+        ValuePool::Ironwood => 2,
+    }
+}
+
+/// Record everything the finalized PCZT must later match, from the committed
+/// selection and the builder metadata (action-index mapping) — never from the
+/// object under verification.
+fn build_expectations(
+    sel: &ShieldedSelection,
+    orchard_meta: &BundleMetadata,
+    ironwood_meta: &BundleMetadata,
+    built_pczt: &pczt::Pczt,
+    change: u64,
+) -> Result<ShieldedExpectations> {
+    let mut spends = Vec::with_capacity(sel.spends.len());
+    let (mut o, mut i) = (0usize, 0usize);
+    let (mut net_orchard, mut net_ironwood) = (0i64, 0i64);
+    for s in &sel.spends {
+        let (meta, bucket) = match s.pool {
+            ValuePool::Orchard => (orchard_meta, &mut o),
+            ValuePool::Ironwood => (ironwood_meta, &mut i),
+        };
+        let action_index = meta
+            .spend_action_index(*bucket)
+            .ok_or_else(|| anyhow!("spend {bucket} missing action index ({:?})", s.pool))?;
+        *bucket += 1;
+        let value_i64 =
+            i64::try_from(s.value).map_err(|_| anyhow!("spend value exceeds i64 range"))?;
+        match s.pool {
+            ValuePool::Orchard => net_orchard = net_orchard.saturating_add(value_i64),
+            ValuePool::Ironwood => net_ironwood = net_ironwood.saturating_add(value_i64),
+        }
+        spends.push(ExpectedSpend {
+            pool: s.pool,
+            action_index,
+            nullifier: s.note.nullifier(&s.fvk).to_bytes(),
+            value: s.value,
+        });
+    }
+
+    let change_meta = match sel.change_pool {
+        ValuePool::Orchard => orchard_meta,
+        ValuePool::Ironwood => ironwood_meta,
+    };
+    let change_action_index = change_meta
+        .output_action_index(0)
+        .ok_or_else(|| anyhow!("change output missing action index"))?;
+    let change_i64 = i64::try_from(change).map_err(|_| anyhow!("change exceeds i64 range"))?;
+    match sel.change_pool {
+        ValuePool::Orchard => net_orchard = net_orchard.saturating_sub(change_i64),
+        ValuePool::Ironwood => net_ironwood = net_ironwood.saturating_sub(change_i64),
+    }
+
+    Ok(ShieldedExpectations {
+        spends,
+        change: ExpectedChange {
+            pool: sel.change_pool,
+            action_index: change_action_index,
+            value: change,
+            address_bytes: sel.change_address.to_raw_address_bytes(),
+            ivk: sel.change_fvk.to_ivk(orchard::keys::Scope::Internal),
+        },
+        actions_orchard: built_pczt.orchard().actions().len(),
+        actions_ironwood: built_pczt.ironwood().actions().len(),
+        anchor_orchard: sel.orchard_anchor.map(|a| a.to_bytes()),
+        anchor_ironwood: sel.ironwood_anchor.map(|a| a.to_bytes()),
+        net_orchard,
+        net_ironwood,
+    })
 }
 
 /// Compute the canonical plan commitment for a shielded plan from its concrete
@@ -408,7 +552,7 @@ fn commit_shielded(
         transparent_outputs,
         Some(&crate::plan::PlanChange {
             value: change,
-            pool: 1,
+            pool: pool_tag(sel.change_pool),
             destination_bytes: change_destination,
         }),
         fee,
@@ -418,32 +562,44 @@ fn commit_shielded(
 }
 
 /// A prepared (unproven, unsigned) shielded plan.
+///
+/// All fields are crate-private: outside this crate the plan is driven only
+/// through [`crate::plan::FundingPlan`]'s staged API, so the PCZT can never be
+/// pulled out and extracted around the [`VerifiedPczt`] boundary.
 pub struct ShieldedPlan {
-    pub stage: Stage,
-    pub selected_value: u64,
-    pub fee: u64,
-    pub change: u64,
+    pub(crate) stage: Stage,
+    pub(crate) selected_value: u64,
+    pub(crate) fee: u64,
+    pub(crate) change: u64,
     /// Canonical serialized change destination, retained for the post-extract
     /// invariant layer.
-    pub change_destination: Vec<u8>,
-    pub branch_id: BranchId,
-    pub target_height: u32,
-    pub canonical_tip: crate::funding::CanonicalTip,
-    pub tx_version: &'static str,
-    pub expiry_height: u32,
-    pub request: TxRequest,
+    pub(crate) change_destination: Vec<u8>,
+    /// Pool tag of the change output (1 = Orchard, 2 = Ironwood), as committed
+    /// in the plan intent hash.
+    pub(crate) change_pool: u8,
+    pub(crate) branch_id: BranchId,
+    pub(crate) target_height: u32,
+    pub(crate) canonical_tip: crate::funding::CanonicalTip,
+    pub(crate) tx_version: &'static str,
+    pub(crate) expiry_height: u32,
+    pub(crate) request: TxRequest,
     /// The exact planned transparent output vector (value + scriptPubKey), in
     /// order, used for post-extract structural verification.
-    pub transparent_outputs: Vec<crate::plan::PlanOutput>,
-    pub pczt: Option<pczt::Pczt>,
+    pub(crate) transparent_outputs: Vec<crate::plan::PlanOutput>,
+    pub(crate) pczt: Option<pczt::Pczt>,
     /// (action index, ask) pairs for the Orchard bundle, in signing order.
-    pub orchard_sign: Vec<(usize, SpendAuthorizingKey)>,
+    pub(crate) orchard_sign: Vec<(usize, SpendAuthorizingKey)>,
     /// (action index, ask) pairs for the Ironwood bundle, in signing order.
-    pub ironwood_sign: Vec<(usize, SpendAuthorizingKey)>,
-    pub circuit_version: OrchardCircuitVersion,
-    pub signed: Option<SignedTx>,
-    pub plan_id: String,
-    pub intent_hash: String,
+    pub(crate) ironwood_sign: Vec<(usize, SpendAuthorizingKey)>,
+    /// Everything the finalized PCZT must match, recorded at plan time.
+    pub(crate) expected: ShieldedExpectations,
+    /// The verified change cmx, stashed by extraction for the post-extract
+    /// re-binding check.
+    pub(crate) expected_change_cmx: Option<[u8; 32]>,
+    pub(crate) circuit_version: OrchardCircuitVersion,
+    pub(crate) signed: Option<SignedTx>,
+    pub(crate) plan_id: String,
+    pub(crate) intent_hash: String,
 }
 
 impl ShieldedPlan {
@@ -476,13 +632,22 @@ impl ShieldedPlan {
     }
 
     pub fn describe_lines(&self) -> Vec<String> {
+        let change_pool = match self.change_pool {
+            2 => "ironwood",
+            _ => "orchard",
+        };
         vec![
             format!(
                 "Shielded spends:    {} note(s), {} zat",
                 self.orchard_sign.len() + self.ironwood_sign.len(),
                 self.selected_value
             ),
-            format!("Shielded change:    {} zat", self.change),
+            format!(
+                "Shielded change:    {} zat -> {} pool, destination {}",
+                self.change,
+                change_pool,
+                hex::encode(&self.change_destination)
+            ),
         ]
     }
 
@@ -564,6 +729,114 @@ impl ShieldedPlan {
             }
         }
 
+        // ── Observable shielded bundle data ─────────────────────────────────
+        // Anchors, nullifiers, per-pool value balances, and the verified
+        // change cmx are all present in the final serialization; re-bind each.
+        self.verify_final_pool(
+            parsed.orchard_bundle(),
+            ValuePool::Orchard,
+            self.expected.actions_orchard,
+        )?;
+        self.verify_final_pool(
+            parsed.ironwood_bundle(),
+            ValuePool::Ironwood,
+            self.expected.actions_ironwood,
+        )?;
+
+        // ── ACTUAL final fee via canonical value accounting ─────────────────
+        // `Transaction::fee_paid` sums transparent + all shielded value
+        // balances. A shielded plan has zero transparent inputs, so the
+        // prevout closure must never be consulted; if it is, fail closed.
+        let actual_fee = parsed
+            .fee_paid(|_| {
+                Err::<Option<zcash_protocol::value::Zatoshis>, anyhow::Error>(anyhow!(
+                    "unexpected transparent input during fee accounting"
+                ))
+            })?
+            .ok_or_else(|| anyhow!("fee not computable from final transaction"))?;
+        if u64::from(actual_fee) != self.fee {
+            bail!(
+                "final fee mismatch: extracted {}, planned {}",
+                u64::from(actual_fee),
+                self.fee
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Re-bind one pool's bundle in the FINAL transaction: exact action count,
+    /// exact anchor, exact planned nullifier at each planned action index,
+    /// exact per-pool value balance, and the verified change cmx.
+    fn verify_final_pool(
+        &self,
+        bundle: Option<
+            &orchard::Bundle<orchard::bundle::Authorized, zcash_protocol::value::ZatBalance>,
+        >,
+        pool: ValuePool,
+        expected_actions: usize,
+    ) -> Result<()> {
+        let Some(bundle) = bundle else {
+            if expected_actions != 0 {
+                bail!("final tx missing {pool:?} bundle");
+            }
+            return Ok(());
+        };
+        if bundle.actions().len() != expected_actions {
+            bail!(
+                "final {pool:?} action count mismatch: {} vs {}",
+                bundle.actions().len(),
+                expected_actions
+            );
+        }
+
+        let expected_anchor = match pool {
+            ValuePool::Orchard => self.expected.anchor_orchard,
+            ValuePool::Ironwood => self.expected.anchor_ironwood,
+        }
+        .ok_or_else(|| anyhow!("final {pool:?} bundle present but no planned anchor"))?;
+        if bundle.anchor().to_bytes() != expected_anchor {
+            bail!("final {pool:?} anchor mismatch");
+        }
+
+        for expected in self.expected.spends.iter().filter(|s| s.pool == pool) {
+            let action = bundle
+                .actions()
+                .iter()
+                .nth(expected.action_index)
+                .ok_or_else(|| anyhow!("final {pool:?} planned spend action missing"))?;
+            if action.nullifier().to_bytes() != expected.nullifier {
+                bail!(
+                    "final {pool:?} nullifier mismatch at action {}",
+                    expected.action_index
+                );
+            }
+        }
+
+        let expected_net = match pool {
+            ValuePool::Orchard => self.expected.net_orchard,
+            ValuePool::Ironwood => self.expected.net_ironwood,
+        };
+        if i64::from(*bundle.value_balance()) != expected_net {
+            bail!("final {pool:?} value balance mismatch");
+        }
+
+        // The change cmx verified at the PCZT boundary must survive into the
+        // final effecting data at the same action index.
+        if self.expected.change.pool == pool {
+            let cmx = self
+                .expected_change_cmx
+                .ok_or_else(|| anyhow!("change cmx not recorded (extraction bypass?)"))?;
+            let action = bundle
+                .actions()
+                .iter()
+                .nth(self.expected.change.action_index)
+                .ok_or_else(|| anyhow!("final {pool:?} change action missing"))?;
+            if action.cmx().to_bytes() != cmx {
+                bail!("final {pool:?} change cmx mismatch");
+            }
+        }
+
         Ok(())
     }
 
@@ -619,12 +892,87 @@ impl ShieldedPlan {
         Ok(())
     }
 
+    /// Extract the final transaction, routing through the [`VerifiedPczt`]
+    /// boundary: the finalized PCZT is verified field-by-field against the
+    /// plan BEFORE the canonical extractor runs. There is no raw-PCZT path.
     pub(crate) fn extract(&mut self) -> Result<SignedTx> {
         self.expect_stage(Stage::Signed)?;
         let pczt = self
             .pczt
             .take()
             .ok_or_else(|| anyhow!("shielded plan has no PCZT"))?;
+        let verified = self.verify_finalized_pczt(pczt)?;
+        self.extract_from_verified(verified)
+    }
+
+    /// Exact plan-vs-finalized-PCZT verification (Item 11 §2-§7). Only this
+    /// method can construct a [`VerifiedPczt`]. Every check fails closed: a
+    /// field the pinned API cannot expose is an error, never a skipped check.
+    pub(crate) fn verify_finalized_pczt(&self, pczt: pczt::Pczt) -> Result<VerifiedPczt> {
+        // ── Global identity ─────────────────────────────────────────────────
+        if *pczt.global().expiry_height() != self.expiry_height {
+            bail!(
+                "pczt expiry mismatch: got {}, expected {}",
+                pczt.global().expiry_height(),
+                self.expiry_height
+            );
+        }
+        if *pczt.global().consensus_branch_id() != u32::from(self.branch_id) {
+            bail!("pczt consensus branch mismatch");
+        }
+
+        // ── Transparent side: zero funding inputs, exact output vector ──────
+        if !pczt.transparent().inputs().is_empty() {
+            bail!(
+                "shielded pczt has {} transparent input(s)",
+                pczt.transparent().inputs().len()
+            );
+        }
+        let t_outs = pczt.transparent().outputs();
+        if t_outs.len() != self.transparent_outputs.len() {
+            bail!(
+                "pczt transparent output count mismatch: {} vs {}",
+                t_outs.len(),
+                self.transparent_outputs.len()
+            );
+        }
+        for (i, (out, planned)) in t_outs.iter().zip(&self.transparent_outputs).enumerate() {
+            if *out.value() != planned.value {
+                bail!("pczt transparent output {i} value mismatch");
+            }
+            if out.script_pubkey().as_slice() != planned.script.as_slice() {
+                bail!("pczt transparent output {i} script mismatch");
+            }
+        }
+
+        // ── Shielded bundles: exact spend/anchor/change binding per pool ────
+        let exp = &self.expected;
+        let mut change_cmx: Option<[u8; 32]> = None;
+        let verifier = pczt::roles::verifier::Verifier::new(pczt);
+        let verifier = verifier
+            .with_orchard::<String, _>(|bundle| {
+                verify_pool_bundle(bundle, ValuePool::Orchard, exp, &mut change_cmx)
+                    .map_err(pczt::roles::verifier::OrchardError::Custom)
+            })
+            .map_err(|e| anyhow!("orchard bundle verification failed: {e:?}"))?;
+        let verifier = verifier
+            .with_ironwood::<String, _>(|bundle| {
+                verify_pool_bundle(bundle, ValuePool::Ironwood, exp, &mut change_cmx)
+                    .map_err(pczt::roles::verifier::OrchardError::Custom)
+            })
+            .map_err(|e| anyhow!("ironwood bundle verification failed: {e:?}"))?;
+        let pczt = verifier.finish();
+
+        let change_cmx =
+            change_cmx.ok_or_else(|| anyhow!("planned change output not found in pczt"))?;
+
+        Ok(VerifiedPczt { pczt, change_cmx })
+    }
+
+    /// Run the canonical extractor over a [`VerifiedPczt`] — the only
+    /// production extraction path.
+    fn extract_from_verified(&mut self, verified: VerifiedPczt) -> Result<SignedTx> {
+        let VerifiedPczt { pczt, change_cmx } = verified;
         let tx = pczt::roles::tx_extractor::TransactionExtractor::new(pczt)
             .extract()
             .map_err(|e| anyhow!("tx extract: {e:?}"))?;
@@ -633,10 +981,159 @@ impl ShieldedPlan {
             .map_err(|e| anyhow!("tx serialize: {e:?}"))?;
         let mut txid = [0u8; 32];
         txid.copy_from_slice(tx.txid().as_ref());
+        self.expected_change_cmx = Some(change_cmx);
         self.signed = Some(SignedTx { bytes, txid });
         self.stage = Stage::Extracted;
         Ok(self.signed.clone().expect("just set"))
     }
+}
+
+/// Verify one pool's bundle in the finalized PCZT against the plan
+/// expectations. `bundle` is the parsed rich view ([`orchard::pczt::Bundle`])
+/// provided by the canonical Verifier role.
+fn verify_pool_bundle(
+    bundle: &orchard::pczt::Bundle,
+    pool: ValuePool,
+    exp: &ShieldedExpectations,
+    change_cmx: &mut Option<[u8; 32]>,
+) -> Result<(), String> {
+    let expected_actions = match pool {
+        ValuePool::Orchard => exp.actions_orchard,
+        ValuePool::Ironwood => exp.actions_ironwood,
+    };
+    if bundle.actions().len() != expected_actions {
+        return Err(format!(
+            "{pool:?} action count mismatch: {} vs {}",
+            bundle.actions().len(),
+            expected_actions
+        ));
+    }
+    if expected_actions == 0 {
+        return Ok(());
+    }
+
+    // Pool identity of the bundle itself.
+    if bundle.bundle_version().value_pool() != pool {
+        return Err(format!("{pool:?} bundle carries wrong value pool"));
+    }
+
+    // Anchor binding: the bundle anchor must equal the exact root the plan
+    // committed for this pool. No zero substitute, no absent-anchor pass.
+    let expected_anchor = match pool {
+        ValuePool::Orchard => exp.anchor_orchard,
+        ValuePool::Ironwood => exp.anchor_ironwood,
+    };
+    let expected_anchor =
+        expected_anchor.ok_or_else(|| format!("{pool:?} bundle present but no planned anchor"))?;
+    if bundle.anchor().to_bytes() != expected_anchor {
+        return Err(format!("{pool:?} anchor mismatch"));
+    }
+
+    let pool_spends: Vec<&ExpectedSpend> = exp.spends.iter().filter(|s| s.pool == pool).collect();
+
+    for (idx, action) in bundle.actions().iter().enumerate() {
+        let spend = action.spend();
+        match pool_spends.iter().find(|s| s.action_index == idx) {
+            Some(expected) => {
+                // Planned spend: exact nullifier and exact note value.
+                if spend.nullifier().to_bytes() != expected.nullifier {
+                    return Err(format!("{pool:?} spend nullifier mismatch at action {idx}"));
+                }
+                let value = spend
+                    .value()
+                    .ok_or_else(|| format!("{pool:?} spend value missing at action {idx}"))?;
+                if value.inner() != expected.value {
+                    return Err(format!("{pool:?} spend value mismatch at action {idx}"));
+                }
+            }
+            None => {
+                // Not a planned spend: must be a zero-value dummy. A missing
+                // value field is a failure, not a pass.
+                let value = spend
+                    .value()
+                    .ok_or_else(|| format!("{pool:?} dummy spend value missing at action {idx}"))?;
+                if value.inner() != 0 {
+                    return Err(format!("{pool:?} extra shielded spend at action {idx}"));
+                }
+            }
+        }
+
+        let output = action.output();
+        let is_change = exp.change.pool == pool && exp.change.action_index == idx;
+        if is_change {
+            // Exact change binding: pool, value, destination.
+            let recipient = output
+                .recipient()
+                .ok_or_else(|| format!("{pool:?} change recipient missing at action {idx}"))?;
+            if recipient.to_raw_address_bytes() != exp.change.address_bytes {
+                return Err(format!("{pool:?} change destination mismatch"));
+            }
+            let value = output
+                .value()
+                .ok_or_else(|| format!("{pool:?} change value missing at action {idx}"))?;
+            if value.inner() != exp.change.value {
+                return Err(format!("{pool:?} change value mismatch"));
+            }
+            // cmx must commit to exactly the plaintext note fields above
+            // (cmx is effecting data in the final transaction).
+            output
+                .verify_note_commitment(spend)
+                .map_err(|e| format!("{pool:?} change note commitment invalid: {e:?}"))?;
+            // Independent canonical trial decryption with our own internal
+            // viewing key: the ciphertext that reaches the chain must decrypt
+            // to the planned change note.
+            let prepared = orchard::keys::PreparedIncomingViewingKey::new(&exp.change.ivk);
+            let decrypted = match pool {
+                ValuePool::Orchard => zcash_note_encryption::try_note_decryption(
+                    &orchard::note_encryption::OrchardDomain::for_pczt_action(action),
+                    &prepared,
+                    action,
+                ),
+                ValuePool::Ironwood => zcash_note_encryption::try_note_decryption(
+                    &orchard::note_encryption::IronwoodDomain::for_pczt_action(action),
+                    &prepared,
+                    action,
+                ),
+            };
+            let (note, addr, _memo) = decrypted
+                .ok_or_else(|| format!("{pool:?} change ciphertext does not decrypt to us"))?;
+            if note.value().inner() != exp.change.value
+                || addr.to_raw_address_bytes() != exp.change.address_bytes
+            {
+                return Err(format!("{pool:?} decrypted change note mismatch"));
+            }
+            *change_cmx = Some(output.cmx().to_bytes());
+        } else {
+            // Not the planned change: any value-bearing output is unplanned.
+            let value = output
+                .value()
+                .ok_or_else(|| format!("{pool:?} output value missing at action {idx}"))?;
+            if value.inner() != 0 {
+                return Err(format!(
+                    "{pool:?} unplanned value-bearing output at action {idx}"
+                ));
+            }
+        }
+    }
+
+    // Pool net value: the bundle's value sum must equal (spends − outputs)
+    // exactly as planned. Sign convention: positive = value leaving the pool.
+    let expected_net: i128 = i128::from(match pool {
+        ValuePool::Orchard => exp.net_orchard,
+        ValuePool::Ironwood => exp.net_ironwood,
+    });
+    let (magnitude, sign) = bundle.value_sum().magnitude_sign();
+    let actual_net: i128 = match sign {
+        orchard::value::Sign::Positive => i128::from(magnitude),
+        orchard::value::Sign::Negative => -i128::from(magnitude),
+    };
+    if actual_net != expected_net {
+        return Err(format!(
+            "{pool:?} value balance mismatch: {actual_net} vs {expected_net}"
+        ));
+    }
+
+    Ok(())
 }
 
 /// Deterministically select notes covering `required_value + fee`, returning the

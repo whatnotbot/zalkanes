@@ -39,6 +39,8 @@ pub mod shielded;
 pub mod sqlite;
 #[cfg(test)]
 mod tamper_matrix;
+#[cfg(all(test, feature = "shielded"))]
+mod tamper_matrix_shielded;
 pub mod transparent;
 
 pub use funding::{CanonicalTip, FundContext, FundingPool, FundingSource, FundingUtxo, TxRequest};
