@@ -146,6 +146,25 @@ funding and change stay in the shielded pool. For PREPARE, value is deshielded
 into the carrier P2SH outputs by construction (the carrier UTXOs must hold value
 to fund the DEPLOY fee); the ZALK *message* remains identical.
 
+### DEPLOY is always transparently signed (carrier scriptSig)
+
+The DEPLOY transaction spends the N carrier UTXOs, whose scriptSigs must carry
+the WASM chunks as extra push-only data. PCZT's `Signer` role uses the standard
+transparent script solver, which cannot produce this non-standard scriptSig (the
+same reason `zalkanes-tx` hand-rolls the carrier scriptSig today). Therefore:
+
+- **PREPARE** and **CALL** are the transactions that gain shielded funding: a
+  shielded (Orchard/Ironwood) spend funds them and shielded change is returned,
+  via the PCZT pipeline.
+- **DEPLOY** is always a transparent-input transaction (it spends transparent
+  carrier UTXOs) and continues to be built and signed by `zalkanes-tx`. Its
+  "shielded funding" is indirect: the carrier value originated from a shielded
+  PREPARE. The carrier outputs themselves are standard P2SH scriptPubKeys, so
+  building them from a shielded PREPARE is fully PCZT-compatible.
+
+This is an API-study finding, not an execution-semantics change: the canonical
+ZALK message and carrier encoding are unaffected.
+
 ### Privacy policy
 
 Shielded funding reports a minimum privacy policy in Zallet's vocabulary

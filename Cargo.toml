@@ -52,6 +52,16 @@ orchard           = { version = "=0.15.5", default-features = false }
 sapling-crypto    = { version = "=0.7.0",  default-features = false }
 secp256k1         = { version = "=0.29.0" }
 
+# ── Wallet (Milestone 4, shielded funding) ────────────────────────────────────
+# Only used when the `zalkanes-wallet` `shielded` feature is enabled, so the
+# consensus build stays lightweight. These resolve against the consensus pins
+# above (see docs/adr/0007-wallet-funding.md for the version matrix).
+pczt                = { version = "=0.9.3",  features = ["transparent", "zcp-builder", "io-finalizer", "prover", "signer", "spend-finalizer", "tx-extractor"] }
+zcash_client_backend = { version = "=0.24.0", default-features = false, features = ["orchard", "pczt", "transparent-inputs"] }
+zcash_client_sqlite  = { version = "=0.22.0", default-features = false, features = ["orchard", "transparent-inputs"] }
+zcash_keys           = { version = "=0.16.1", default-features = false, features = ["orchard", "transparent-inputs"] }
+zcash_proofs         = { version = "=0.30.0", default-features = false }
+
 # Storage
 rocksdb = { version = "=0.22.0", default-features = false, features = ["snappy"] }
 
