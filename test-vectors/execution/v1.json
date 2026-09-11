@@ -1,0 +1,1157 @@
+[
+  {
+    "height": 1,
+    "desc": "deploy counter",
+    "root": "5a1f51113a291088fab8696b47570fd2932e8c776adcb3c7ac6d774cf04f3310",
+    "executions": []
+  },
+  {
+    "height": 2,
+    "desc": "increment #1",
+    "root": "7f546b18de6f391c742cbb37b899e8046e26c2f89bd49d73f6f8e868f9d50e02",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 3,
+    "desc": "increment #2",
+    "root": "e870b7dd6004972f35624cc625ef6bf1fe65ee9c29bd14769f3394dcd21a05e6",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 4,
+    "desc": "increment #3",
+    "root": "99cbd00ac9728abdc73e091483db3a61cf925808206105bc88f8794ff665f162",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 5,
+    "desc": "increment #4",
+    "root": "8b66927b2706ee7c9258252fc0144c6f7fe943b69964051ab1495bdbde7fa177",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 6,
+    "desc": "increment #5",
+    "root": "05fbc7014d2dfb0fb89ef25f8d3e53f862f9e87fa6f3d50ad030eeddad2d7aeb",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 7,
+    "desc": "increment #6",
+    "root": "4dcf75b0387668ad868281d279cf8bd53b912eb69d4afa26dbdec1d4e84f8731",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 8,
+    "desc": "increment #7",
+    "root": "61249dda7f60ed8ff53945943272df8550f09d09b631653b77a3d0f5ccc6417b",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 9,
+    "desc": "increment #8",
+    "root": "0096017a4b1348c853a8e39c4b6b2a242e5c12ce467a20ffedd35dca974ac1ab",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 10,
+    "desc": "increment #9",
+    "root": "fa8eb8470aa7773f5c702822e8815f8de9fb590ba3d3d0b82732c97b8b56ed49",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 11,
+    "desc": "increment #10",
+    "root": "ba44fe205ba03ecfad63653c553383540ba26c539a3473d20d284458f3482944",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 12,
+    "desc": "increment #11",
+    "root": "3565620a960110499d6bd4887898fac2d48237d3209e8ae3f3a446a0f3290db0",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 13,
+    "desc": "increment #12",
+    "root": "65f307a30f19082e57b5bff7882764656d46d959db64a0a0b40088f693720487",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 14,
+    "desc": "increment #13",
+    "root": "81afb907bb4db25d0fb1cc40c28d2f414f1be9698f6964c5599c9cae91d88dc1",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 15,
+    "desc": "increment #14",
+    "root": "4ddb65645a0d63954e853691a669fe7805ae74dd0ba9104ef257f68dd07c8da8",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 16,
+    "desc": "increment #15",
+    "root": "bbb05477d340c24836fb86f3365ffbfa1a9d2c9ef2698f7d33488c9566d767c9",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 17,
+    "desc": "increment #16",
+    "root": "d2a25d2a28628c9069f89ede118db977e69d0409eaab1648186aaed8fb42c862",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 18,
+    "desc": "increment #17",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 19,
+    "desc": "increment #18",
+    "root": "cd1bbc849d1794621123183de6dfaeccf51378d51997b65bb4e954a5f99ece65",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 20,
+    "desc": "increment #19",
+    "root": "ff157016bec5eea641beb020a6c85e3f9fe565c309499dbe3da1717ff6c6cb4d",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 21,
+    "desc": "increment #20",
+    "root": "62f1ba1ef7f238da7535cb5d4573b7711d4e045665042ee6b4dacc29d83e5dd9",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 22,
+    "desc": "increment #21",
+    "root": "52421a029f634d4355891f9888392d010dbac4f33d08c6d4da4880e413e1a90d",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 23,
+    "desc": "increment #22",
+    "root": "281c5b56aed5c381b7629b3e15202cb3677d90fa3dd7adc65029038d64194bb4",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 24,
+    "desc": "increment #23",
+    "root": "ccb89f0b87191eba33477759e4af8e9daa74f4dc2e138d6b09e3369a07d5d5cf",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 25,
+    "desc": "increment #24",
+    "root": "5c2fe8ed0d8b5411747167df9690debc0333600e2ae3abfc4d3a27d26b956573",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 26,
+    "desc": "increment #25",
+    "root": "cffdf3adcc1f667c47751b780493268f7e0b014abddbffd5f3c2e11bf4608b2f",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 27,
+    "desc": "increment #26",
+    "root": "dcfb1c5afc39f2c03c080750bbe6ed085aef9ea7d4e6f5e3073786df3e5306d3",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 28,
+    "desc": "increment #27",
+    "root": "7ad231d028574148ba683edce5d4eb531314f74b6ecee37a71e4a7a4ed9eef0a",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 29,
+    "desc": "increment #28",
+    "root": "8a16fb33095d04ff16b5ce5db5401056b01e582c137afd0558fdd7f88eba302d",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 30,
+    "desc": "increment #29",
+    "root": "f16289f64aa1bcd98fb0dd8408f22cf2e7e565d6fc4178dc162d083bdea91cd4",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 31,
+    "desc": "increment #30",
+    "root": "72570bfc6517ba8e869b821d088c745f949a8a5a219e087486b620c85c9873bc",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 32,
+    "desc": "increment #31",
+    "root": "8763cc1505dbb7c24190a19815dc3c1008111beb009b19fb1fd2a7cfa858b15f",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 33,
+    "desc": "increment #32",
+    "root": "ea3fdb4cf927d54eba36388e6d77a2590d2f94fdc1d3c60a90ceb9fad69c1385",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 34,
+    "desc": "increment #33",
+    "root": "e0974488406a0821f11ce8e1a39c18836a82e95b97aacbfaf64e5d665e42a872",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 35,
+    "desc": "increment #34",
+    "root": "6d37a7044dc159ad68dd8a41272e0f5102700585d4995f718efd6e9eb0192b22",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 36,
+    "desc": "increment #35",
+    "root": "88f4267c7e6a75c8b25e25aad6398d2cd9f732f47aa777d3f6fb8f137556574c",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 37,
+    "desc": "increment #36",
+    "root": "8abe68b892a9aa06b80ce0e8d8c3edc40ee17f6de8383f3c904327a80b0280b5",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 38,
+    "desc": "increment #37",
+    "root": "7babe240b9ab1648e3cba91ffc6cbf2a5149221abeec1ecc593b521b994b963d",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 39,
+    "desc": "increment #38",
+    "root": "b4478e5eba757a4d59e20f064a370dfe59dedad99656354a36a3a928b3b68453",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 40,
+    "desc": "increment #39",
+    "root": "867a8ed62461778095bf39606ecda7108cd8e946ba14a031f9a2c76e8f87243a",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 41,
+    "desc": "increment #40",
+    "root": "13af72b486cd6460bd000cbe286a7d9bf633cd1bd54ebb8fcf30547f77657a25",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 42,
+    "desc": "increment #41",
+    "root": "9f4e6750294763b6eff6a38151ea2939882789cf0f43b8b374af4ba913a3127f",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 43,
+    "desc": "increment #42",
+    "root": "8d35259f960ade2e13e0b1acaf60d54a66679bb7903b671bbafef71f9addbebd",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 44,
+    "desc": "increment #43",
+    "root": "4aba4dff5f82919cd9c2bfa63a514372627e92c928b38262e720fbc64fd6a254",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 45,
+    "desc": "increment #44",
+    "root": "5801ff37f3b8d7d9f6d31b3c83f71b2450cffa10f58e7d6d5a3e10a4433d6b27",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 46,
+    "desc": "increment #45",
+    "root": "d004baee51828f0abe2a8d012043a1b2cdc13f9aabc4a1f05f63801d1e2b7e17",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 47,
+    "desc": "increment #46",
+    "root": "0f69d4d2d1125aa8db87807ae1a0ff7d41d08ede90c421ce81e4127326bebfea",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 48,
+    "desc": "increment #47",
+    "root": "c0ee5cfb6ca9027d7b25c03409b6d106a55a5df7925176941b89f29e393bebdf",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 49,
+    "desc": "increment #48",
+    "root": "52469477ce464e986f1ccc1e5b39dcf832a2c9b6e15c563e4bd0b17feb94997c",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 50,
+    "desc": "increment #49",
+    "root": "08e25189c686ea18da66400a5c83b97d4bc0f54130580a49f55786b676d8ecec",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 51,
+    "desc": "increment #50",
+    "root": "8afa37da64ba8919fd088af740641b306c03ca167a7aef9aea69f5b9e6d62927",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 52,
+    "desc": "increment #51",
+    "root": "e6638bd7248aaadfe9ffd1e9e0ef8f4ebb2a5bb5316444820410a1c62e176e8e",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 53,
+    "desc": "increment #52",
+    "root": "9a63a4beb0017544fd95b3608ff32685699618fed287635919209919ccb734d5",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 54,
+    "desc": "increment #53",
+    "root": "1b7653f554b351383fee52fe5794b2ce7d02b757cf9d490da22b9bb26d410c96",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 55,
+    "desc": "increment #54",
+    "root": "001c24aa30e9af28d944ee2c37d90ef4e169f798d380c4f192492bf493a167f2",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 56,
+    "desc": "increment #55",
+    "root": "d102320eb81f2c016968845e653eecf9eb32784e0641fb9157186f5081aab9d4",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 57,
+    "desc": "increment #56",
+    "root": "ad9c07dc082996c698ac57f4b2abe4d5f16a0c4063a34b6934d0449c5add8b78",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 58,
+    "desc": "increment #57",
+    "root": "d778b7ccd462e31b7e4fe916da4b86d4aa49f28a0156b5106ec14707e6e1450a",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 59,
+    "desc": "increment #58",
+    "root": "102f19b8e3399c86fdccc793f0064741989b37424fef3758d4f14c42890e4cc7",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 60,
+    "desc": "increment #59",
+    "root": "c2b0677fec0dd6f311512c8541555551153a7df38936571a19f5d170668a2bb0",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 61,
+    "desc": "increment #60",
+    "root": "c7b5841f3657fa3e5a5373b8626e769335eeece427fc77d94847ce2b922dbd38",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 62,
+    "desc": "initialize(7)",
+    "root": "61249dda7f60ed8ff53945943272df8550f09d09b631653b77a3d0f5ccc6417b",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3879,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 63,
+    "desc": "post-init increment #1",
+    "root": "0096017a4b1348c853a8e39c4b6b2a242e5c12ce467a20ffedd35dca974ac1ab",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 64,
+    "desc": "post-init increment #2",
+    "root": "fa8eb8470aa7773f5c702822e8815f8de9fb590ba3d3d0b82732c97b8b56ed49",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 65,
+    "desc": "post-init increment #3",
+    "root": "ba44fe205ba03ecfad63653c553383540ba26c539a3473d20d284458f3482944",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 66,
+    "desc": "post-init increment #4",
+    "root": "3565620a960110499d6bd4887898fac2d48237d3209e8ae3f3a446a0f3290db0",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 67,
+    "desc": "post-init increment #5",
+    "root": "65f307a30f19082e57b5bff7882764656d46d959db64a0a0b40088f693720487",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 68,
+    "desc": "post-init increment #6",
+    "root": "81afb907bb4db25d0fb1cc40c28d2f414f1be9698f6964c5599c9cae91d88dc1",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 69,
+    "desc": "post-init increment #7",
+    "root": "4ddb65645a0d63954e853691a669fe7805ae74dd0ba9104ef257f68dd07c8da8",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 70,
+    "desc": "post-init increment #8",
+    "root": "bbb05477d340c24836fb86f3365ffbfa1a9d2c9ef2698f7d33488c9566d767c9",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 71,
+    "desc": "post-init increment #9",
+    "root": "d2a25d2a28628c9069f89ede118db977e69d0409eaab1648186aaed8fb42c862",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 72,
+    "desc": "post-init increment #10",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 73,
+    "desc": "unknown opcode (deterministic error)",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": [
+      {
+        "success": false,
+        "fuel_used": 316,
+        "error": "dispatch returned error code -1"
+      }
+    ]
+  },
+  {
+    "height": 74,
+    "desc": "call to missing contract",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": [
+      {
+        "success": false,
+        "fuel_used": 0,
+        "error": "contract not found"
+      }
+    ]
+  },
+  {
+    "height": 75,
+    "desc": "truncated magic-only payload",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": []
+  },
+  {
+    "height": 76,
+    "desc": "unknown version byte",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": []
+  },
+  {
+    "height": 77,
+    "desc": "non-ZALK payload skipped",
+    "root": "806e158ec238e8d46c206fa5ce6da8008cd0da161646cc48e5e634c7bc055482",
+    "executions": []
+  },
+  {
+    "height": 78,
+    "desc": "deploy infinite-loop contract",
+    "root": "70fa58aa3f889800e0f7d4c3a664020ef52d25a0905afe7adcf03025c9c6d372",
+    "executions": []
+  },
+  {
+    "height": 79,
+    "desc": "fuel exhaustion (spin)",
+    "root": "70fa58aa3f889800e0f7d4c3a664020ef52d25a0905afe7adcf03025c9c6d372",
+    "executions": [
+      {
+        "success": false,
+        "fuel_used": 10000000,
+        "error": "fuel exhausted"
+      }
+    ]
+  },
+  {
+    "height": 80,
+    "desc": "deploy store/delete contract",
+    "root": "efd84de85ea74f7a9e4a7e705ecf01c7d9a14706edff928537d3216e61446f7b",
+    "executions": []
+  },
+  {
+    "height": 81,
+    "desc": "storage write",
+    "root": "8eafec55aa7fb1b1307078f77972129534ee623fd96082cc08bf9ad426dd45be",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 21,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 82,
+    "desc": "same-call write-then-delete",
+    "root": "efd84de85ea74f7a9e4a7e705ecf01c7d9a14706edff928537d3216e61446f7b",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 24,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 83,
+    "desc": "trap after write (writes discarded)",
+    "root": "efd84de85ea74f7a9e4a7e705ecf01c7d9a14706edff928537d3216e61446f7b",
+    "executions": [
+      {
+        "success": false,
+        "fuel_used": 20,
+        "error": "wasm `unreachable` instruction executed"
+      }
+    ]
+  },
+  {
+    "height": 84,
+    "desc": "deploy second counter instance",
+    "root": "0c340ce94122efd95f9149a372d1f4078b5194876d4cf6829d79a63f597196f7",
+    "executions": []
+  },
+  {
+    "height": 85,
+    "desc": "counter2 increment #1",
+    "root": "239002a71707cff4a9a9e282fe8ca7f48fa3345dceafb13fab7004284a7e64a6",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 86,
+    "desc": "counter2 increment #2",
+    "root": "549aab8cafe771c3002d96d241dd9535def1cf2375d60be96f725e7688f6cdce",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 87,
+    "desc": "counter2 increment #3",
+    "root": "a051fc9e08d556a45bd831cac8eafa374e7a244ce880daceed7d0a3d52aea2c8",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 88,
+    "desc": "counter2 increment #4",
+    "root": "058e079dd920c03cadd25741d9b608f27a1ed2de31dda476c0ddce3fe840ccd2",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 89,
+    "desc": "counter2 increment #5",
+    "root": "9c2de79a7cd6944110a1a69b28477881d3c1886703f86beb40dd068670fd8546",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 90,
+    "desc": "counter2 increment #6",
+    "root": "4ff927a0841a706daa87d6cc53aa4b3168d99f5fafaca518f28a91c8a7ac4c6b",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 91,
+    "desc": "counter2 increment #7",
+    "root": "cbced4bb3db858aa0bd675eb8ca2d097f7885f582c7960dc0d9c6b0bd085b24e",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 92,
+    "desc": "counter2 increment #8",
+    "root": "d6a2c6f22334845bb84defb543b2b0924e0c166a3e830dcb33d9d43e186613d2",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 93,
+    "desc": "counter2 increment #9",
+    "root": "e5acf3d4721cb1a5e6eab94f60896fb8106c6459838bf08586c02ce3ab0ebe8f",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 94,
+    "desc": "counter2 increment #10",
+    "root": "50905dcbdb7c99f3d559a885ba852e8179245da579eb7fc389adb525aee51b96",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 95,
+    "desc": "multi-tx block (2x increment + get)",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      },
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      },
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      }
+    ]
+  },
+  {
+    "height": 96,
+    "desc": "multi-tx block (get + missing contract)",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": [
+      {
+        "success": true,
+        "fuel_used": 3936,
+        "error": null
+      },
+      {
+        "success": false,
+        "fuel_used": 0,
+        "error": "contract not found"
+      }
+    ]
+  },
+  {
+    "height": 97,
+    "desc": "no-op block #1",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": []
+  },
+  {
+    "height": 98,
+    "desc": "no-op block #2",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": []
+  },
+  {
+    "height": 99,
+    "desc": "no-op block #3",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": []
+  },
+  {
+    "height": 100,
+    "desc": "no-op block #4",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": []
+  },
+  {
+    "height": 101,
+    "desc": "no-op block #5",
+    "root": "0a20b55f3cdfb3d9d45329ea5d9f9087375aa4380f2d8f9e36dfbc625bccfb18",
+    "executions": []
+  }
+]

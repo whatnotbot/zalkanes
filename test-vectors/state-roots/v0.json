@@ -1,19 +1,19 @@
 [
   {
     "description": "empty state root",
-    "protocol": 0,
+    "expected_root": "b120099c167da673588b15aa827c3bbd9339a9a2d934b0d20c99cebe69f8ffe6",
     "height": 0,
-    "zcash_block_hash": "0000000000000000000000000000000000000000000000000000000000000000",
     "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "protocol": 0,
     "state_entries": [],
-    "expected_root": "TO_BE_COMPUTED"
+    "zcash_block_hash": "0000000000000000000000000000000000000000000000000000000000000000"
   },
   {
     "description": "single entry",
-    "protocol": 0,
+    "expected_root": "89adc463b054f8b328c5728a125b0b768f4bfa589f0c69c8772eef28a52fb93a",
     "height": 1,
-    "zcash_block_hash": "0000000000000000000000000000000000000000000000000000000000000001",
     "previous_root": "0000000000000000000000000000000000000000000000000000000000000000",
+    "protocol": 0,
     "state_entries": [
       {
         "contract_id": "0101010101010101010101010101010101010101010101010101010101010101",
@@ -21,6 +21,6 @@
         "value_hex": "0000000000000001"
       }
     ],
-    "expected_root": "TO_BE_COMPUTED"
+    "zcash_block_hash": "0000000000000000000000000000000000000000000000000000000000000001"
   }
 ]

@@ -11,3 +11,7 @@ blake2b_simd = { workspace = true }
 sha2 = { workspace = true }
 hex = { workspace = true }
 zcash_protocol = { workspace = true }
+
+[dev-dependencies]
+serde_json = { workspace = true }
+hex = { workspace = true }

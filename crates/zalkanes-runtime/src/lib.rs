@@ -104,6 +104,20 @@ const HOST_IMPORTS: [&str; 6] = [
     "input_read",
 ];
 
+/// Parse a module with panic containment. The pinned wasmi 2.0.0 translator
+/// can PANIC on certain malformed modules (found by the wasm_validator
+/// fuzzer: `translator/func/stack/control.rs` assertion) — for a consensus
+/// node a deterministic panic is a network-wide halt, so a translation panic
+/// is converted into a deterministic rejection instead. The same input
+/// panics (and is therefore rejected) identically on every node.
+fn parse_module_contained(engine: &Engine, wasm: &[u8]) -> Result<Module, String> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Module::new(engine, wasm))) {
+        Ok(Ok(m)) => Ok(m),
+        Ok(Err(e)) => Err(format!("WASM parse error: {e}")),
+        Err(_) => Err("WASM parse error: engine translation panic (rejected)".to_string()),
+    }
+}
+
 pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
     if wasm.len() as u32 > MAX_CODE_BYTES {
         return Err(format!(
@@ -113,7 +127,7 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
         ));
     }
     let engine = Engine::new(&consensus_config());
-    Module::new(&engine, wasm).map_err(|e| format!("WASM parse error: {e}"))?;
+    parse_module_contained(&engine, wasm)?;
 
     let counts = count_module_entities(wasm)?;
 
@@ -283,13 +297,9 @@ pub fn execute(ctx: CallContext, state: &dyn StateStore) -> CallResult {
     // validation time (feature gates + fuel metering).
     let engine = Engine::new(&consensus_config());
 
-    let module = match Module::new(&engine, &wasm) {
+    let module = match parse_module_contained(&engine, &wasm) {
         Ok(m) => m,
-        Err(e) => {
-            return CallResult::InvalidModule {
-                reason: e.to_string(),
-            }
-        }
+        Err(reason) => return CallResult::InvalidModule { reason },
     };
 
     let host = HostState {

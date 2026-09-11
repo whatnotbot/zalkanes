@@ -55,6 +55,18 @@ enum UndoOp {
         key: Vec<u8>,
         prev: Vec<u8>,
     },
+    /// A contract was deployed in this block; undo removes it. A distinct
+    /// variant (NOT an empty-key `Set` sentinel): contracts may legally write
+    /// zero-length storage keys, and the old sentinel made a rollback delete
+    /// the whole contract instead of restoring such a key (found by the
+    /// state_transition fuzzer).
+    Deploy {
+        contract: ContractId,
+        /// The replaced contract, if the id was already deployed (the state
+        /// engine is self-consistent even though the indexer refuses
+        /// redeploys): rollback restores it instead of deleting the id.
+        prev: Option<(CodeHash, Vec<u8>)>,
+    },
 }
 
 // ── StateStore trait ─────────────────────────────────────────────────────────
@@ -291,11 +303,10 @@ impl StateStore for MemoryState {
     fn commit_block(&mut self, commit: BlockCommit) -> Result<StateRoot> {
         let mut undo = Vec::new();
 
+        let mut deploy_prevs = Vec::with_capacity(commit.deploys.len());
         for (id, code_hash, wasm) in &commit.deploys {
             let prev = self.contracts.insert(id.0, (*code_hash, wasm.clone()));
-            // Record deploy for undo (contract was not present, or replaced).
-            // For simplicity, deployments are keyed so rollback re-deletes them.
-            let _ = prev;
+            deploy_prevs.push(prev);
         }
         for (cid, key, value) in &commit.upserts {
             let prev = self.storage.insert((cid.0, key.clone()), value.clone());
@@ -316,12 +327,11 @@ impl StateStore for MemoryState {
             }
         }
 
-        // Record deployments for undo.
-        for (id, _, _) in &commit.deploys {
-            undo.push(UndoOp::Set {
+        // Record deployments for undo (distinct variant; see UndoOp::Deploy).
+        for ((id, _, _), prev) in commit.deploys.iter().zip(deploy_prevs) {
+            undo.push(UndoOp::Deploy {
                 contract: ContractId(id.0),
-                key: Vec::new(),
-                prev: None,
+                prev,
             });
         }
 
@@ -356,21 +366,14 @@ impl StateStore for MemoryState {
                             contract,
                             key,
                             prev,
-                        } => {
-                            if key.is_empty() {
-                                // Deployment undo: remove contract.
-                                self.contracts.remove(&contract.0);
-                            } else {
-                                match prev {
-                                    Some(v) => {
-                                        self.storage.insert((contract.0, key), v);
-                                    }
-                                    None => {
-                                        self.storage.remove(&(contract.0, key));
-                                    }
-                                }
+                        } => match prev {
+                            Some(v) => {
+                                self.storage.insert((contract.0, key), v);
                             }
-                        }
+                            None => {
+                                self.storage.remove(&(contract.0, key));
+                            }
+                        },
                         UndoOp::Delete {
                             contract,
                             key,
@@ -378,6 +381,14 @@ impl StateStore for MemoryState {
                         } => {
                             self.storage.insert((contract.0, key), prev);
                         }
+                        UndoOp::Deploy { contract, prev } => match prev {
+                            Some((code_hash, wasm)) => {
+                                self.contracts.insert(contract.0, (code_hash, wasm));
+                            }
+                            None => {
+                                self.contracts.remove(&contract.0);
+                            }
+                        },
                     }
                 }
             }
@@ -461,8 +472,13 @@ fn exec_height_db_key(height: BlockHeight) -> [u8; 5] {
 }
 
 /// Serialize an undo op list (internal, not consensus data).
+/// v2 journal marker (the first four bytes of a legacy blob are the op
+/// count, which can never be this value).
+const UNDO_V2_MARKER: [u8; 4] = [0xFF, 0xFF, 0xFF, 0xFE];
+
 fn encode_undo(ops: &[UndoOp]) -> Vec<u8> {
     let mut out = Vec::new();
+    out.extend_from_slice(&UNDO_V2_MARKER);
     out.extend_from_slice(&(ops.len() as u32).to_be_bytes());
     for op in ops {
         match op {
@@ -496,6 +512,19 @@ fn encode_undo(ops: &[UndoOp]) -> Vec<u8> {
                 out.extend_from_slice(&(prev.len() as u32).to_be_bytes());
                 out.extend_from_slice(prev);
             }
+            UndoOp::Deploy { contract, prev } => {
+                out.push(0x03);
+                out.extend_from_slice(&contract.0);
+                match prev {
+                    Some((code_hash, wasm)) => {
+                        out.push(0x01);
+                        out.extend_from_slice(&code_hash.0);
+                        out.extend_from_slice(&(wasm.len() as u32).to_be_bytes());
+                        out.extend_from_slice(wasm);
+                    }
+                    None => out.push(0x00),
+                }
+            }
         }
     }
     out
@@ -505,6 +534,17 @@ fn decode_undo(mut bytes: &[u8]) -> Vec<UndoOp> {
     let mut ops = Vec::new();
     if bytes.len() < 4 {
         return ops;
+    }
+    // Legacy (pre-v2) journals encode deploy undos as an empty-key `Set`
+    // sentinel; translate those to `Deploy` on read. Legacy writers never
+    // produced empty-key storage undos on any live chain (no deployed
+    // contract writes zero-length keys), so the translation is faithful.
+    let legacy = bytes[0..4] != UNDO_V2_MARKER;
+    if !legacy {
+        bytes = &bytes[4..];
+        if bytes.len() < 4 {
+            return ops;
+        }
     }
     let n = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]) as usize;
     bytes = &bytes[4..];
@@ -517,6 +557,38 @@ fn decode_undo(mut bytes: &[u8]) -> Vec<UndoOp> {
         let mut cid = [0u8; 32];
         cid.copy_from_slice(&bytes[0..32]);
         bytes = &bytes[32..];
+
+        // Deploy (0x03): contract id + optional replaced contract.
+        if tag == 0x03 {
+            let Some(&has_prev) = bytes.first() else {
+                break;
+            };
+            bytes = &bytes[1..];
+            let prev = if has_prev == 0x01 {
+                if bytes.len() < 36 {
+                    break;
+                }
+                let mut ch = [0u8; 32];
+                ch.copy_from_slice(&bytes[0..32]);
+                let wlen =
+                    u32::from_be_bytes([bytes[32], bytes[33], bytes[34], bytes[35]]) as usize;
+                bytes = &bytes[36..];
+                if bytes.len() < wlen {
+                    break;
+                }
+                let wasm = bytes[..wlen].to_vec();
+                bytes = &bytes[wlen..];
+                Some((CodeHash(ch), wasm))
+            } else {
+                None
+            };
+            ops.push(UndoOp::Deploy {
+                contract: ContractId(cid),
+                prev,
+            });
+            continue;
+        }
+
         if bytes.len() < 2 {
             break;
         }
@@ -551,11 +623,18 @@ fn decode_undo(mut bytes: &[u8]) -> Vec<UndoOp> {
                 } else {
                     None
                 };
-                ops.push(UndoOp::Set {
-                    contract: ContractId(cid),
-                    key,
-                    prev,
-                });
+                if legacy && key.is_empty() && prev.is_none() {
+                    ops.push(UndoOp::Deploy {
+                        contract: ContractId(cid),
+                        prev: None,
+                    });
+                } else {
+                    ops.push(UndoOp::Set {
+                        contract: ContractId(cid),
+                        key,
+                        prev,
+                    });
+                }
             }
             0x02 => {
                 // Delete
@@ -741,14 +820,19 @@ impl StateStore for RocksState {
             let mut v = Vec::with_capacity(32 + wasm.len());
             v.extend_from_slice(&code_hash.0);
             v.extend_from_slice(wasm);
-            // Record whether the contract already existed (for undo).
-            let prev = self.db.get(&key).ok().flatten();
-            let _ = prev;
+            // Record the replaced contract (if any) for undo.
+            let prev = self.db.get(&key).ok().flatten().and_then(|bytes| {
+                if bytes.len() < 32 {
+                    return None;
+                }
+                let mut ch = [0u8; 32];
+                ch.copy_from_slice(&bytes[0..32]);
+                Some((CodeHash(ch), bytes[32..].to_vec()))
+            });
             batch.put(key, v);
-            undo.push(UndoOp::Set {
+            undo.push(UndoOp::Deploy {
                 contract: *id,
-                key: Vec::new(),
-                prev: None,
+                prev,
             });
         }
         for (cid, key, value) in &commit.upserts {
@@ -853,16 +937,10 @@ impl StateStore for RocksState {
                             contract,
                             key,
                             prev,
-                        } => {
-                            if key.is_empty() {
-                                batch.delete(contract_db_key(&contract));
-                            } else {
-                                match prev {
-                                    Some(v) => batch.put(storage_db_key(&contract, &key), v),
-                                    None => batch.delete(storage_db_key(&contract, &key)),
-                                }
-                            }
-                        }
+                        } => match prev {
+                            Some(v) => batch.put(storage_db_key(&contract, &key), v),
+                            None => batch.delete(storage_db_key(&contract, &key)),
+                        },
                         UndoOp::Delete {
                             contract,
                             key,
@@ -870,6 +948,15 @@ impl StateStore for RocksState {
                         } => {
                             batch.put(storage_db_key(&contract, &key), prev);
                         }
+                        UndoOp::Deploy { contract, prev } => match prev {
+                            Some((code_hash, wasm)) => {
+                                let mut v = Vec::with_capacity(32 + wasm.len());
+                                v.extend_from_slice(&code_hash.0);
+                                v.extend_from_slice(&wasm);
+                                batch.put(contract_db_key(&contract), v);
+                            }
+                            None => batch.delete(contract_db_key(&contract)),
+                        },
                     }
                 }
                 batch.delete(height_db_key(h));

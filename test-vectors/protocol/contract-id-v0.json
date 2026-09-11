@@ -1,26 +1,26 @@
 [
   {
+    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "description": "counter deploy regtest",
+    "expected_contract_id_hex": "63098b901bee6002080510b2ea5945afeb99a6f7b5f604d8841624d03793deb2",
     "network": "regtest",
-    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101",
     "output_index": 0,
-    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "expected_contract_id_hex": "TO_BE_COMPUTED"
+    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101"
   },
   {
+    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "description": "different output index yields different id",
+    "expected_contract_id_hex": "8efac73e7e51a05978f9a69709a37e012931117d18b38b1f54f90c03392d8763",
     "network": "regtest",
-    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101",
     "output_index": 1,
-    "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "expected_contract_id_hex": "TO_BE_COMPUTED"
+    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101"
   },
   {
-    "description": "mainnet produces different id than regtest",
-    "network": "mainnet",
-    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101",
-    "output_index": 0,
     "code_hash_hex": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-    "expected_contract_id_hex": "TO_BE_COMPUTED"
+    "description": "mainnet produces different id than regtest",
+    "expected_contract_id_hex": "d446cd0ae470026e07693eacf6e0d50fe7c4c628840f36128ae4878938dfd0f0",
+    "network": "mainnet",
+    "output_index": 0,
+    "txid_hex": "0101010101010101010101010101010101010101010101010101010101010101"
   }
 ]

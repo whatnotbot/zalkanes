@@ -171,6 +171,55 @@ impl TestChain {
     }
 
     /// Commit an empty block (advances height, no state change).
+    /// Mine a block whose OP_RETURN carries ARBITRARY bytes (may be a
+    /// malformed or non-ZALK payload): exercises the parser's skip/error
+    /// paths through the production block processor.
+    pub fn raw_message_block(&mut self, payload: &[u8]) -> Result<()> {
+        let txid = synthetic_txid(self.height, 1);
+        let parsed = self.call_parsed_block(&txid, payload);
+        self.height += 1;
+        let config = self.indexer_config();
+        process_parsed_block(&mut self.state, &config, parsed)
+            .with_context(|| "process raw block")?;
+        Ok(())
+    }
+
+    /// Mine ONE block containing multiple CALL transactions (per-block budget
+    /// and intra-block visibility semantics under test).
+    pub fn multi_call_block(&mut self, calls: &[(ContractId, u16, Vec<u8>)]) -> Result<()> {
+        let height = self.height + 1;
+        let hash = BlockHash(synthetic_hash(height));
+        let mut transactions = Vec::new();
+        for (i, (contract_id, opcode, input)) in calls.iter().enumerate() {
+            let txid = synthetic_txid(self.height, (i + 1) as u32);
+            let msg = CallMessage {
+                contract_id: *contract_id,
+                opcode: *opcode,
+                input: input.clone(),
+            };
+            transactions.push(ParsedTransaction {
+                txid,
+                outputs: vec![(0u16, op_return_script(&encode_call(&msg)))],
+                inputs: vec![(0u32, encode_coinbase_script(height))],
+            });
+        }
+        let parsed = ParsedBlock {
+            height,
+            hash,
+            transactions,
+        };
+        self.height += 1;
+        let config = self.indexer_config();
+        process_parsed_block(&mut self.state, &config, parsed)
+            .with_context(|| "process multi-call block")?;
+        Ok(())
+    }
+
+    /// Mutable access to the underlying state (rollback tests).
+    pub fn state_mut(&mut self) -> &mut MemoryState {
+        &mut self.state
+    }
+
     pub fn mine_empty_block(&mut self) -> Result<()> {
         let root_before = self.state.compute_root();
         self.height += 1;

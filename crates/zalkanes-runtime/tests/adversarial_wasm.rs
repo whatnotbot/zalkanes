@@ -370,3 +370,21 @@ fn deployed_counter_fixture_still_validates_and_runs_with_live_fuel() {
         other => panic!("increment must succeed: {other:?}"),
     }
 }
+
+#[test]
+fn wasmi_translator_panic_input_is_rejected_not_fatal() {
+    // Found by the wasm_validator fuzzer: this module makes the pinned wasmi
+    // 2.0.0 translator PANIC internally (control.rs stack assertion). For a
+    // consensus node a deterministic panic is a network-wide halt, so
+    // validate_module contains the panic and rejects the module — twice, to
+    // prove the rejection is deterministic.
+    let bytes = include_bytes!("fixtures/wasmi_translator_panic.bin");
+    let a = validate_module(bytes).expect_err("must be rejected, not a panic");
+    let b = validate_module(bytes).expect_err("must be rejected, not a panic");
+    assert_eq!(a, b, "containment must be deterministic");
+    // Profile note: debug builds hit a wasmi-internal assertion (contained
+    // into "translation panic"); release builds reject with a clean parse
+    // error. The CONSENSUS outcome — deterministic rejection — is identical
+    // in both profiles and on both architectures.
+    assert!(a.starts_with("WASM parse error"), "got: {a}");
+}
