@@ -21,7 +21,6 @@ use secrecy::{ExposeSecret, SecretVec};
 use sha2::{Digest, Sha256};
 use zcash_client_backend::{
     data_api::{
-        chain::ChainState,
         locking::{LockOwner, OutputLockStore},
         wallet::{
             input_selection::{LockFilter, LockedInputPolicy},
@@ -68,6 +67,7 @@ impl SqliteShieldedWallet {
         path: &std::path::Path,
         network: Network,
         seed: SecretVec<u8>,
+        chain_source: &dyn crate::chain_source::CanonicalChainSource,
     ) -> Result<Self> {
         let mut db = WalletDb::for_path(path, network, SystemClock, OsRng)
             .map_err(|e| anyhow!("open wallet db: {e}"))?;
@@ -87,13 +87,14 @@ impl SqliteShieldedWallet {
             .map_err(|e| anyhow!("account ids: {e}"))?
         {
             ids if ids.is_empty() => {
-                let birthday = AccountBirthday::from_parts(
-                    ChainState::empty(
-                        BlockHeight::from_u32(0),
-                        zcash_primitives::block::BlockHash([0u8; 32]),
-                    ),
-                    None,
-                );
+                // Real birthday: the canonical treestate at `tip - 100` (upstream
+                // reorg buffer), so a reorg cannot drop a newly-targeted payment
+                // below the wallet's birthday. The treestate is the block BEFORE
+                // the birthday height.
+                let tip = chain_source.canonical_tip()?;
+                let birthday_state_height = tip.height.saturating_sub(100);
+                let chain_state = chain_source.tree_state(birthday_state_height)?;
+                let birthday = AccountBirthday::from_parts(chain_state, None);
                 let (id, _usk) = db
                     .create_account("zalkanes", &seed, &birthday, None)
                     .map_err(|e| anyhow!("create account: {e}"))?;
@@ -355,11 +356,36 @@ fn pool_to_shielded_pool(pool: ValuePool) -> ShieldedPool {
 mod tests {
     use super::*;
     use rand_core::RngCore;
+    use zcash_client_backend::data_api::chain::ChainState;
+    use zcash_primitives::block::{Block, BlockHash};
 
     fn random_seed() -> SecretVec<u8> {
         let mut bytes = vec![0u8; 32];
         OsRng.fill_bytes(&mut bytes);
         SecretVec::new(bytes)
+    }
+
+    /// A mock chain source returning an empty treestate (unit test only).
+    struct MockChainSource;
+    impl crate::chain_source::CanonicalChainSource for MockChainSource {
+        fn canonical_tip(&self) -> Result<crate::funding::CanonicalTip> {
+            Ok(crate::funding::CanonicalTip {
+                height: 200,
+                hash: [0u8; 32],
+            })
+        }
+        fn block_hash(&self, _h: u32) -> Result<[u8; 32]> {
+            Ok([0u8; 32])
+        }
+        fn block(&self, _h: u32) -> Result<Block> {
+            unreachable!("mock block")
+        }
+        fn tree_state(&self, h: u32) -> Result<ChainState> {
+            Ok(ChainState::empty(
+                BlockHeight::from_u32(h),
+                BlockHash([0u8; 32]),
+            ))
+        }
     }
 
     #[test]
@@ -371,9 +397,13 @@ mod tests {
             hex::encode(suffix)
         ));
 
-        let wallet =
-            SqliteShieldedWallet::open_or_create(&path, Network::TestNetwork, random_seed())
-                .unwrap();
+        let wallet = SqliteShieldedWallet::open_or_create(
+            &path,
+            Network::TestNetwork,
+            random_seed(),
+            &MockChainSource,
+        )
+        .unwrap();
 
         let ua = wallet.unified_address().unwrap();
         assert!(!ua.is_empty());

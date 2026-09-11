@@ -26,6 +26,8 @@
 
 #![forbid(unsafe_code)]
 
+#[cfg(feature = "shielded")]
+pub mod chain_source;
 pub mod funding;
 pub mod plan;
 pub mod policy;
@@ -42,6 +44,8 @@ pub use plan::{
 pub use policy::PrivacyPolicy;
 pub use transparent::TransparentFunding;
 
+#[cfg(feature = "shielded")]
+pub use chain_source::{CanonicalChainSource, ZebraCanonicalChainSource};
 #[cfg(feature = "shielded")]
 pub use shielded::{ShieldedFunding, ShieldedSelection, ShieldedSpend, ShieldedWallet, SyncStatus};
 #[cfg(feature = "shielded")]
