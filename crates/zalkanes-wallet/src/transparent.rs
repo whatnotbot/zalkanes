@@ -130,6 +130,7 @@ impl FundingSource for TransparentFunding {
             request: request.clone(),
             branch_id,
             target_height: ctx.target_height,
+            canonical_tip: ctx.canonical_tip(),
             stage: Stage::Planned,
             signed: None,
             plan_id,
@@ -207,6 +208,30 @@ mod tests {
             #[cfg(feature = "shielded")]
             _ => unreachable!(),
         }
+    }
+
+    #[test]
+    fn stale_plan_is_rejected_after_tip_change() {
+        let f = funding();
+        let req = TxRequest::Call {
+            op_return: vec![0x5a, 0x41, 0x4c, 0x4b, 0x00, 0x02],
+        };
+        let plan = f.plan(&req, &ctx()).unwrap();
+
+        // Same tip -> fresh.
+        plan.check_freshness(crate::funding::CanonicalTip {
+            height: 1,
+            hash: [0u8; 32],
+        })
+        .unwrap();
+
+        // Same height, different hash (same-height reorg) -> stale.
+        assert!(plan
+            .check_freshness(crate::funding::CanonicalTip {
+                height: 1,
+                hash: [0xAAu8; 32],
+            })
+            .is_err());
     }
 
     #[test]

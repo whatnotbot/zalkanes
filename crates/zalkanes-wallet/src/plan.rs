@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use zalkanes_tx::SignedTx;
 use zcash_protocol::consensus::BranchId;
 
-use crate::funding::TxRequest;
+use crate::funding::{CanonicalTip, TxRequest};
 use crate::policy::PrivacyPolicy;
 
 /// A fresh random, hex-encoded plan id. Unique per plan; the same id is retained
@@ -308,6 +308,31 @@ impl FundingPlan {
         }
     }
 
+    /// The canonical chain identity this plan is pinned to.
+    pub fn canonical_tip(&self) -> CanonicalTip {
+        match self {
+            FundingPlan::Transparent(p) => p.canonical_tip,
+            #[cfg(feature = "shielded")]
+            FundingPlan::Shielded(p) => p.canonical_tip,
+        }
+    }
+
+    /// Reject the plan if the canonical chain identity has changed. Call before
+    /// prove/sign/extract/broadcast; a change means the plan must be re-made.
+    pub fn check_freshness(&self, current: CanonicalTip) -> Result<()> {
+        let planned = self.canonical_tip();
+        if planned != current {
+            bail!(
+                "StalePlan: chain state changed (planned {}:{}, current {}:{}); re-plan required",
+                planned.height,
+                hex::encode(planned.hash),
+                current.height,
+                hex::encode(current.hash),
+            );
+        }
+        Ok(())
+    }
+
     // ── Authorization stages ───────────────────────────────────────────────
 
     /// Produce any zero-knowledge proofs required by this transaction.
@@ -355,6 +380,8 @@ pub struct TransparentPlan {
     pub request: TxRequest,
     pub branch_id: BranchId,
     pub target_height: u32,
+    /// The canonical chain identity this plan is pinned to.
+    pub canonical_tip: CanonicalTip,
     pub stage: Stage,
     pub signed: Option<SignedTx>,
     pub plan_id: String,
