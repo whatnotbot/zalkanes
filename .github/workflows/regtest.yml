@@ -1,0 +1,139 @@
+name: live-zebra-regtest
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Isolated, ephemeral regtest only. This workflow NEVER touches the public
+# testnet Zebra service or any Railway volume: it downloads the pinned
+# zebrad release, runs it on a throwaway runner filesystem, and is torn down
+# with the job.
+jobs:
+  regtest:
+    name: live zebrad regtest (pinned v6.3.0)
+    runs-on: ubuntu-24.04
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      ZEBRA_VERSION: 6.3.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: fetch pinned zebrad release (verified checksum)
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/ZcashFoundation/zebra/releases/download/v${ZEBRA_VERSION}"
+          FILE="zebrad-${ZEBRA_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSLO "$BASE/$FILE"
+          curl -sSLO "$BASE/$FILE.sha256"
+          sha256sum -c "$FILE.sha256"
+          tar xzf "$FILE"
+          find . -name zebrad -type f -exec cp {} /usr/local/bin/zebrad \;
+          chmod +x /usr/local/bin/zebrad
+          zebrad --version
+
+      - name: start an isolated regtest node
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/zebra-regtest
+          # Same activation heights as deploy/zebra/zebra-regtest.toml, so the
+          # regtest chain runs the frozen NU6.3 rules the wallet targets.
+          cat > /tmp/zebra-regtest/zebrad.toml <<'EOF'
+          [network]
+          network = "Regtest"
+          listen_addr = "127.0.0.1:18233"
+
+          [network.testnet_parameters.activation_heights]
+          NU5 = 1
+          NU6 = 1
+          NU6_1 = 1
+          NU6_2 = 1
+          NU6_3 = 1
+
+          [state]
+          cache_dir = "/tmp/zebra-regtest/state"
+          ephemeral = true
+
+          [rpc]
+          listen_addr = "127.0.0.1:18232"
+          enable_cookie_auth = false
+
+          [mining]
+          miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
+          EOF
+          zebrad -c /tmp/zebra-regtest/zebrad.toml start > /tmp/zebrad.log 2>&1 &
+          echo $! > /tmp/zebrad.pid
+          # Wait for the RPC port to answer.
+          for i in $(seq 1 60); do
+            if curl -s -m 2 -X POST http://127.0.0.1:18232 \
+                 -H 'Content-Type: application/json' \
+                 -d '{"jsonrpc":"1.0","id":"ci","method":"getblockchaininfo","params":[]}' \
+                 | grep -q '"chain"'; then
+              echo "zebrad RPC is up after ${i}s"; break
+            fi
+            sleep 1
+          done
+          curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"1.0","id":"ci","method":"getblockchaininfo","params":[]}' | head -c 400
+          echo
+
+      - name: mine a regtest chain
+        run: |
+          set -euo pipefail
+          curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"1.0","id":"ci","method":"generate","params":[120]}' | head -c 200
+          echo
+          curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
+            -d '{"jsonrpc":"1.0","id":"ci","method":"getblockcount","params":[]}'
+          echo
+
+      - name: live wallet + CLI acceptance against the real node
+        env:
+          ZALKANES_NETWORK: regtest
+          ZALKANES_ZCASH_RPC_URL: http://127.0.0.1:18232
+          ZALKANES_WALLET_DIR: /tmp/zalkanes-wallet
+          ZALKANES_PASSPHRASE: ci-regtest-passphrase
+        run: |
+          set -euo pipefail
+          cargo build --release -p zalkanes-cli
+          BIN=target/release/zalkanes
+
+          echo "── wallet create (real treestate from the live node) ──"
+          "$BIN" wallet create
+
+          echo "── locked reopen is watch-capable ──"
+          "$BIN" wallet address
+          "$BIN" wallet balance
+          "$BIN" wallet status
+
+          echo "── scan real regtest blocks while LOCKED ──"
+          "$BIN" wallet scan
+
+          echo "── a shielded spend must be refused while LOCKED ──"
+          if "$BIN" contract call $(printf '0%.0s' {1..64}) 1 --funding shielded --yes; then
+            echo "::error::locked wallet accepted a shielded spend"; exit 1
+          fi
+
+          echo "── unlock arms the session, lock disarms it ──"
+          "$BIN" wallet unlock
+          "$BIN" wallet status | grep -q UNLOCKED
+          "$BIN" wallet lock
+          "$BIN" wallet status | grep -q LOCKED
+
+          echo "── dry-run plans without side effects ──"
+          "$BIN" contract call $(printf '0%.0s' {1..64}) 1 --dry-run || true
+          test ! -f /tmp/zalkanes-wallet/journal.sqlite
+
+          echo "live regtest acceptance OK"
+
+      - name: node log tail
+        if: always()
+        run: tail -40 /tmp/zebrad.log || true
+
+      - name: stop the node
+        if: always()
+        run: kill "$(cat /tmp/zebrad.pid)" 2>/dev/null || true
