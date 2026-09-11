@@ -28,6 +28,7 @@ use zcash_client_backend::{
         },
         AccountBirthday, InputSource, TargetValue, WalletCommitmentTrees, WalletRead, WalletWrite,
     },
+    scanning::{self, Nullifiers, ScanningKeys},
     wallet::{OutputRef, ReceivedNote},
 };
 use zcash_client_sqlite::{util::SystemClock, AccountUuid, ReceivedNoteId, WalletDb};
@@ -120,6 +121,91 @@ impl SqliteShieldedWallet {
     pub fn set_canonical_tip(&self, tip: crate::funding::CanonicalTip) {
         self.zebra_tip.set(tip.height);
         self.zebra_tip_hash.set(tip.hash);
+    }
+
+    /// Scan from the wallet's current tip through `chain_source`'s canonical tip
+    /// using the canonical full-block path (`decrypt_block` -> `scan_block` ->
+    /// `put_blocks`). Rejects (and leaves the wallet unsynced) if the canonical
+    /// chain identity changed while scanning.
+    pub fn scan_to_tip(
+        &self,
+        chain_source: &dyn crate::chain_source::CanonicalChainSource,
+    ) -> Result<()> {
+        let target = chain_source.canonical_tip()?;
+        let network = *self.db.borrow().params();
+
+        let (ufvks, nullifiers) = {
+            let db = self.db.borrow();
+            let ufvks = db
+                .get_unified_full_viewing_keys()
+                .map_err(|e| anyhow!("ufvks: {e}"))?;
+            (
+                ufvks,
+                Nullifiers::unspent(&*db).map_err(|e| anyhow!("nullifiers: {e}"))?,
+            )
+        };
+        let scanning_keys = ScanningKeys::from_account_ufvks(ufvks);
+
+        let mut db = self.db.borrow_mut();
+        let mut nullifiers = nullifiers;
+        let mut height = self.wallet_scan_tip()?.0 + 1;
+
+        while height <= target.height {
+            // Reorg check: the wallet's scanned hash at height-1 must still match
+            // our Zebra; a mismatch means a fork and we bail to rewind/rescan.
+            if height > 0 {
+                let prev = BlockHeight::from_u32(height - 1);
+                let wallet_hash = db
+                    .get_block_hash(prev)
+                    .map_err(|e| anyhow!("wallet block hash: {e}"))?
+                    .map(|h| h.0)
+                    .unwrap_or([0u8; 32]);
+                let zebra_hash = chain_source.block_hash(height - 1)?;
+                if wallet_hash != zebra_hash {
+                    bail!(
+                        "reorg detected at height {}: wallet hash {}, zebra hash {}",
+                        height - 1,
+                        hex::encode(wallet_hash),
+                        hex::encode(zebra_hash)
+                    );
+                }
+            }
+
+            let block = chain_source.block(height)?;
+            let prior_metadata = db
+                .block_metadata(BlockHeight::from_u32(height - 1))
+                .map_err(|e| anyhow!("block metadata: {e}"))?;
+            let (header, vtx) = scanning::full::decrypt_block(&network, block, &scanning_keys);
+            let scanned = scanning::full::scan_block(
+                &network,
+                BlockHeight::from_u32(height),
+                &header,
+                vtx,
+                &scanning_keys,
+                &nullifiers,
+                prior_metadata.as_ref(),
+                |_addr| Ok::<_, std::convert::Infallible>(None),
+            )
+            .map_err(|e| anyhow!("scan block {height}: {e:?}"))?;
+            nullifiers.update_with(&scanned);
+
+            let from_state = chain_source.tree_state(height - 1)?;
+            db.put_blocks(&from_state, vec![scanned])
+                .map_err(|e| anyhow!("put block {height}: {e}"))?;
+            height += 1;
+        }
+
+        // Post-scan re-verification: the canonical tip must be unchanged.
+        let final_hash = chain_source.block_hash(target.height)?;
+        if final_hash != target.hash {
+            bail!(
+                "canonical tip changed while scanning ({} != {}); re-run sync",
+                hex::encode(final_hash),
+                hex::encode(target.hash)
+            );
+        }
+        self.set_canonical_tip(target);
+        Ok(())
     }
 
     pub fn account_id(&self) -> AccountUuid {
