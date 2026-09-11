@@ -8,12 +8,9 @@ should confirm whether any of these change the security conclusion.
 | Constant | Status |
 |----------|--------|
 | `MAX_FUNCTIONS`, `MAX_GLOBALS`, `MAX_TABLE_ELEMENTS`, `MAX_LINEAR_MEMORY_PAGES`, `MAX_IMPORTS`, `MAX_EXPORTS` | **Enforced** via `wasmparser` section counting in `validate_module`. |
-| `MAX_FUEL_PER_ZCASH_TX` | **Not aggregated.** `MAX_FUEL_PER_CALL` is enforced per call; per-transaction fuel is not yet summed. |
-| `MAX_FUEL_PER_ZCASH_BLOCK` | **Not aggregated.** Same as above at block scope. |
+| `MAX_FUEL_PER_ZCASH_TX`, `MAX_FUEL_PER_ZCASH_BLOCK` | **Enforced** in the indexer (per-tx and per-block fuel budgets). |
 | `MAX_STORAGE_WRITES_PER_CALL` | Enforced (distinct overlay keys). |
-
-The per-tx/per-block fuel aggregation is a **release-blocking** item tracked
-under the block-DoS workstream; it is not yet complete.
+| `MAX_ZALK_MESSAGES_PER_TX`, `MAX_ZALK_MESSAGES_PER_BLOCK`, `MAX_CARRIER_BYTES_PER_BLOCK`, `MAX_DEPLOY_BYTES_PER_BLOCK` | **Enforced** in the indexer. |
 
 ## Structural limitations
 

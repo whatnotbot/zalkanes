@@ -52,6 +52,20 @@ pub const MAX_FUEL_PER_ZCASH_BLOCK: u64 = 1_000_000_000;
 /// Maximum contract-to-contract call depth.
 pub const MAX_CALL_DEPTH: u32 = 16;
 
+/// Maximum number of Zalkanes protocol messages (OP_RETURN outputs) in one
+/// Zcash transaction.
+pub const MAX_ZALK_MESSAGES_PER_TX: u32 = 16;
+
+/// Maximum number of Zalkanes protocol messages across one Zcash block.
+pub const MAX_ZALK_MESSAGES_PER_BLOCK: u32 = 4_096;
+
+/// Maximum total carrier bytes (deploy WASM + call calldata) processed across
+/// one Zcash block.
+pub const MAX_CARRIER_BYTES_PER_BLOCK: u64 = 4 * 1024 * 1024;
+
+/// Maximum total deployment WASM bytes processed across one Zcash block.
+pub const MAX_DEPLOY_BYTES_PER_BLOCK: u64 = 4 * 1024 * 1024;
+
 // ── Storage limits ───────────────────────────────────────────────────────────
 
 /// Maximum byte length of a storage key.

@@ -14,7 +14,12 @@ use anyhow::Result;
 use tracing::{debug, info, warn};
 use zalkanes_carrier::{extract_op_return_data, Chunk};
 use zalkanes_core::{
-    consensus::{MAINNET_ACTIVATION_HEIGHT, REGTEST_ACTIVATION_HEIGHT, TESTNET_ACTIVATION_HEIGHT},
+    consensus::{
+        MAINNET_ACTIVATION_HEIGHT, MAX_CARRIER_BYTES_PER_BLOCK, MAX_DEPLOY_BYTES_PER_BLOCK,
+        MAX_FUEL_PER_CALL, MAX_FUEL_PER_ZCASH_BLOCK, MAX_FUEL_PER_ZCASH_TX,
+        MAX_ZALK_MESSAGES_PER_BLOCK, MAX_ZALK_MESSAGES_PER_TX, REGTEST_ACTIVATION_HEIGHT,
+        TESTNET_ACTIVATION_HEIGHT,
+    },
     types::{BlockHash, BlockHeight, CodeHash, ContractId, Execution, Network, StateRoot},
 };
 use zalkanes_protocol::{parse_op_return, Message};
@@ -40,6 +45,15 @@ impl IndexerConfig {
             Network::Regtest => REGTEST_ACTIVATION_HEIGHT,
         }
     }
+}
+
+/// Per-block resource accounting, enforcing the DoS bounds.
+#[derive(Debug, Default)]
+struct BlockLimits {
+    fuel_used: u64,
+    messages: u32,
+    carrier_bytes: u64,
+    deploy_bytes: u64,
 }
 
 /// Executions produced by processing one block.
@@ -165,6 +179,7 @@ pub fn process_parsed_block(
     };
     let mut executions = Vec::new();
     let mut deployed = Vec::new();
+    let mut limits = BlockLimits::default();
 
     for tx in &parsed.transactions {
         process_transaction(
@@ -173,6 +188,7 @@ pub fn process_parsed_block(
             &mut commit,
             &mut executions,
             &mut deployed,
+            &mut limits,
             tx,
         )?;
     }
@@ -203,30 +219,84 @@ fn process_transaction(
     commit: &mut BlockCommit,
     executions: &mut Vec<Execution>,
     deployed: &mut Vec<ContractId>,
+    limits: &mut BlockLimits,
     tx: &ParsedTransaction,
 ) -> Result<()> {
+    let mut tx_fuel_used = 0u64;
+    let mut tx_messages = 0u32;
+
     // Iterate transparent outputs; find Zalkanes OP_RETURN messages.
     for (out_idx, script_pubkey) in &tx.outputs {
         let Some(payload) = extract_op_return_data(script_pubkey) else {
             continue;
         };
-        match parse_op_return(&payload) {
-            Ok(Some(Message::Deploy(deploy))) => {
+        let parsed = match parse_op_return(&payload) {
+            Ok(Some(m)) => m,
+            Ok(None) => continue,
+            Err(e) => {
+                debug!(txid = %tx.txid, error = %e, "parse error in OP_RETURN; skipping");
+                continue;
+            }
+        };
+
+        // Per-tx and per-block message caps.
+        tx_messages += 1;
+        limits.messages += 1;
+        if tx_messages > MAX_ZALK_MESSAGES_PER_TX || limits.messages > MAX_ZALK_MESSAGES_PER_BLOCK {
+            warn!(txid = %tx.txid, "ZALK message cap exceeded; skipping remaining messages");
+            return Ok(());
+        }
+
+        match parsed {
+            Message::Deploy(deploy) => {
                 if deploy.output_index != *out_idx {
                     debug!(txid = %tx.txid, "deploy output_index mismatch; skipping");
                     continue;
                 }
+                // Account declared deploy bytes before reconstruction so a block
+                // full of huge declared deploys is bounded.
+                limits.carrier_bytes = limits
+                    .carrier_bytes
+                    .saturating_add(deploy.code_length as u64);
+                limits.deploy_bytes = limits
+                    .deploy_bytes
+                    .saturating_add(deploy.code_length as u64);
+                if limits.carrier_bytes > MAX_CARRIER_BYTES_PER_BLOCK
+                    || limits.deploy_bytes > MAX_DEPLOY_BYTES_PER_BLOCK
+                {
+                    warn!(txid = %tx.txid, "per-block carrier/deploy byte cap exceeded; skipping deploy");
+                    continue;
+                }
                 handle_deploy(store, config, commit, deployed, tx, deploy)?;
             }
-            Ok(Some(Message::Call(call))) => {
-                handle_call(store, commit, executions, tx, call)?;
+            Message::Call(call) => {
+                handle_call(
+                    store,
+                    commit,
+                    executions,
+                    tx,
+                    limits,
+                    &mut tx_fuel_used,
+                    call,
+                )?;
             }
-            Ok(Some(Message::CallCarrier(call))) => {
-                handle_call_carrier(store, commit, executions, tx, call)?;
-            }
-            Ok(None) => {}
-            Err(e) => {
-                debug!(txid = %tx.txid, error = %e, "parse error in OP_RETURN; skipping");
+            Message::CallCarrier(call) => {
+                limits.carrier_bytes = limits
+                    .carrier_bytes
+                    .saturating_add(call.input_length as u64);
+                if limits.carrier_bytes > MAX_CARRIER_BYTES_PER_BLOCK {
+                    warn!(txid = %tx.txid, "per-block carrier byte cap exceeded; skipping carrier call");
+                    continue;
+                }
+                handle_call_carrier(
+                    store,
+                    commit,
+                    executions,
+                    tx,
+                    limits,
+                    &mut tx_fuel_used,
+                    call,
+                )?;
             }
         }
     }
@@ -286,6 +356,8 @@ fn handle_call(
     commit: &mut BlockCommit,
     executions: &mut Vec<Execution>,
     tx: &ParsedTransaction,
+    limits: &mut BlockLimits,
+    tx_fuel_used: &mut u64,
     call: zalkanes_protocol::CallMessage,
 ) -> Result<()> {
     execute_call(
@@ -293,6 +365,8 @@ fn handle_call(
         commit,
         executions,
         tx,
+        limits,
+        tx_fuel_used,
         call.contract_id,
         call.opcode,
         call.input,
@@ -304,6 +378,8 @@ fn handle_call_carrier(
     commit: &mut BlockCommit,
     executions: &mut Vec<Execution>,
     tx: &ParsedTransaction,
+    limits: &mut BlockLimits,
+    tx_fuel_used: &mut u64,
     call: zalkanes_protocol::CallCarrierMessage,
 ) -> Result<()> {
     // Collect carrier chunks from transparent inputs, in order.
@@ -326,6 +402,8 @@ fn handle_call_carrier(
             commit,
             executions,
             tx,
+            limits,
+            tx_fuel_used,
             call.contract_id,
             call.opcode,
             calldata,
@@ -337,15 +415,28 @@ fn handle_call_carrier(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn execute_call(
     store: &mut dyn StateStore,
     commit: &mut BlockCommit,
     executions: &mut Vec<Execution>,
     tx: &ParsedTransaction,
+    limits: &mut BlockLimits,
+    tx_fuel_used: &mut u64,
     contract_id: ContractId,
     opcode: u16,
     input: Vec<u8>,
 ) -> Result<()> {
+    // Enforce per-tx and per-block fuel budgets. A call gets at most the
+    // minimum of the per-call cap and the remaining tx/block budget.
+    let remaining_tx = MAX_FUEL_PER_ZCASH_TX.saturating_sub(*tx_fuel_used);
+    let remaining_block = MAX_FUEL_PER_ZCASH_BLOCK.saturating_sub(limits.fuel_used);
+    let fuel_limit = MAX_FUEL_PER_CALL.min(remaining_tx).min(remaining_block);
+    if fuel_limit == 0 {
+        warn!(txid = %tx.txid, "fuel budget exhausted; skipping call");
+        return Ok(());
+    }
+
     let ctx = CallContext {
         contract_id,
         caller: None,
@@ -353,7 +444,7 @@ fn execute_call(
         block_height: 0, // patched below; CallContext needs height — see note
         opcode,
         input,
-        fuel_limit: zalkanes_core::consensus::MAX_FUEL_PER_CALL,
+        fuel_limit,
         depth: 0,
     };
     // Set the block height from the current commit.
@@ -385,6 +476,10 @@ fn execute_call(
             (false, 0, vec![], Some("contract not found".into()), vec![])
         }
     };
+
+    // Account fuel into the tx and block budgets.
+    *tx_fuel_used = tx_fuel_used.saturating_add(fuel_used);
+    limits.fuel_used = limits.fuel_used.saturating_add(fuel_used);
 
     for w in writes {
         apply_write(commit, w);
