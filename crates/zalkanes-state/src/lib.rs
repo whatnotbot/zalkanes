@@ -761,10 +761,24 @@ impl StateStore for RocksState {
                 prev,
             });
         }
+        // Deletes see the commit's own upserts (a key upserted and deleted in
+        // the SAME commit ends up deleted), mirroring MemoryState and
+        // `projected_root` exactly. The undo value is the value effectively
+        // removed at this point (the same-commit upsert if present, else the
+        // pre-commit value), so reversed-order rollback restores the exact
+        // pre-commit state.
+        let upserted: std::collections::HashMap<([u8; 32], Vec<u8>), Vec<u8>> = commit
+            .upserts
+            .iter()
+            .map(|(cid, key, value)| ((cid.0, key.clone()), value.clone()))
+            .collect();
         for (cid, key) in &commit.deletes {
             let db_key = storage_db_key(cid, key);
-            let prev = self.db.get(&db_key).ok().flatten();
-            if let Some(prev) = prev {
+            let effective = upserted
+                .get(&(cid.0, key.clone()))
+                .cloned()
+                .or_else(|| self.db.get(&db_key).ok().flatten());
+            if let Some(prev) = effective {
                 batch.delete(db_key);
                 undo.push(UndoOp::Delete {
                     contract: *cid,
@@ -782,24 +796,39 @@ impl StateStore for RocksState {
         batch.put(b"m:h", commit.height.to_be_bytes());
         batch.put(b"m:b", commit.zcash_block_hash.0);
 
+        // Compute the post-commit root BEFORE writing, so the data, undo
+        // journal, metadata, height record, AND the root all land in ONE
+        // atomic WriteBatch. (Previously the height record carried a
+        // placeholder root patched by two follow-up writes, leaving a crash
+        // window with a zeroed persisted root.)
+        let root = projected_root(self, &commit);
         let hkey = height_db_key(commit.height);
         let mut rec = Vec::with_capacity(64);
         rec.extend_from_slice(&commit.zcash_block_hash.0);
-        // Placeholder root; patched after computing authoritative root below.
-        rec.extend_from_slice(&[0u8; 32]);
+        rec.extend_from_slice(&root.0);
         batch.put(hkey, rec);
+        batch.put(b"m:r", root.0);
 
         self.db.write(batch).context("rocksdb write batch failed")?;
 
-        // Compute the authoritative root now that writes are applied.
-        let root = self.compute_root();
-        let mut rec = Vec::with_capacity(64);
-        rec.extend_from_slice(&commit.zcash_block_hash.0);
-        rec.extend_from_slice(&root.0);
-        self.db.put(hkey, rec).context("rocksdb put root failed")?;
-        self.db
-            .put(b"m:r", root.0)
-            .context("rocksdb put m:r failed")?;
+        // Defensive cross-check: the applied state must hash to the projected
+        // root. A mismatch is a consensus-critical bug and must be loud.
+        let applied = self.compute_root();
+        if applied != root {
+            anyhow::bail!(
+                "post-commit state root mismatch at height {}: projected {} != applied {}",
+                commit.height,
+                root.0
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>(),
+                applied
+                    .0
+                    .iter()
+                    .map(|b| format!("{b:02x}"))
+                    .collect::<String>()
+            );
+        }
 
         Ok(root)
     }
