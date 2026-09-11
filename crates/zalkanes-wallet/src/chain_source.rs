@@ -149,7 +149,7 @@ impl CanonicalChainSource for ZebraCanonicalChainSource {
 
     fn block(&self, height: u32) -> Result<Block> {
         let expected = self.block_hash(height)?;
-        let raw: String = self.rpc("getblock", serde_json::json!([height, 0]))?;
+        let raw: String = self.rpc("getblock", serde_json::json!([height.to_string(), 0]))?;
         let bytes = hex::decode(raw.trim_start_matches("0x"))
             .map_err(|e| anyhow!("invalid block hex: {e}"))?;
         let block = Block::read(&mut &bytes[..], &self.network)
