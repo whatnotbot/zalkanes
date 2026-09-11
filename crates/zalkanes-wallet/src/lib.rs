@@ -27,6 +27,8 @@
 #![forbid(unsafe_code)]
 
 #[cfg(feature = "shielded")]
+pub mod broadcast;
+#[cfg(feature = "shielded")]
 pub mod chain_source;
 pub mod funding;
 #[cfg(feature = "shielded")]
@@ -50,6 +52,11 @@ pub use plan::{
 pub use policy::PrivacyPolicy;
 pub use transparent::TransparentFunding;
 
+#[cfg(feature = "shielded")]
+pub use broadcast::{
+    broadcast_verified, reconcile, BroadcastOutcome, BroadcastTransport, ReconcileReport,
+    ReleaseHook, TxStatus, TxStatusSource, ZebraBroadcastClient,
+};
 #[cfg(feature = "shielded")]
 pub use chain_source::{CanonicalChainSource, ZebraCanonicalChainSource};
 #[cfg(feature = "shielded")]

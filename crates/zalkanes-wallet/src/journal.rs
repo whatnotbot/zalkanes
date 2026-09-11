@@ -89,6 +89,9 @@ impl JournalStage {
                 | (Broadcasting, BroadcastAccepted)
                 | (Broadcasting, BroadcastUnknown)
                 | (Broadcasting, Rejected)
+                // Reconciliation may observe the mined transaction directly
+                // (mined is proof of acceptance).
+                | (Broadcasting, Mined)
                 | (BroadcastUnknown, BroadcastAccepted)
                 | (BroadcastUnknown, Mined)
                 | (BroadcastUnknown, Rejected)
@@ -322,6 +325,45 @@ impl Journal {
         }
     }
 
+    /// One operation's full persisted row.
+    pub fn operation(&self, plan_id: &str) -> Result<Option<OperationRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT plan_id, intent_hash, kind, funding_mode, lock_owner, tip_height,
+                        tip_hash, target_height, selected_inputs, stage, txid, expiry, last_error
+                 FROM operations WHERE plan_id = ?1",
+            )
+            .map_err(|e| anyhow!("journal prepare: {e}"))?;
+        let mut rows = stmt
+            .query(params![plan_id])
+            .map_err(|e| anyhow!("journal query: {e}"))?;
+        match rows.next().map_err(|e| anyhow!("journal row: {e}"))? {
+            Some(row) => Ok(Some(row_to_operation(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// All non-terminal rows, oldest first (for restart reconciliation).
+    pub fn non_terminal_rows(&self) -> Result<Vec<OperationRow>> {
+        let mut stmt = self
+            .conn
+            .prepare(
+                "SELECT plan_id, intent_hash, kind, funding_mode, lock_owner, tip_height,
+                        tip_hash, target_height, selected_inputs, stage, txid, expiry, last_error
+                 FROM operations WHERE stage NOT IN
+                 ('mined','cancelled','expired','rejected','reorged')
+                 ORDER BY created_at ASC",
+            )
+            .map_err(|e| anyhow!("journal prepare: {e}"))?;
+        let mut rows = stmt.query([]).map_err(|e| anyhow!("journal query: {e}"))?;
+        let mut out = Vec::new();
+        while let Some(row) = rows.next().map_err(|e| anyhow!("journal row: {e}"))? {
+            out.push(row_to_operation(row)?);
+        }
+        Ok(out)
+    }
+
     /// All non-terminal entries (for restart reconciliation).
     pub fn non_terminal(&self) -> Result<Vec<String>> {
         let mut stmt = self
@@ -340,6 +382,49 @@ impl Journal {
         }
         Ok(out)
     }
+}
+
+/// One persisted operation (all lifecycle metadata; no secrets, no tx bytes).
+#[derive(Clone, Debug)]
+pub struct OperationRow {
+    pub plan_id: String,
+    pub intent_hash: String,
+    pub kind: String,
+    pub funding_mode: String,
+    pub lock_owner: String,
+    pub tip_height: u32,
+    pub tip_hash: String,
+    pub target_height: u32,
+    pub selected_inputs: String,
+    pub stage: JournalStage,
+    pub txid: Option<String>,
+    pub expiry: Option<u32>,
+    pub last_error: Option<String>,
+}
+
+fn row_to_operation(row: &rusqlite::Row<'_>) -> Result<OperationRow> {
+    let stage_s: String = row.get(9).map_err(|e| anyhow!("journal get stage: {e}"))?;
+    let tip_height: i64 = row.get(5).map_err(|e| anyhow!("journal get: {e}"))?;
+    let target_height: i64 = row.get(7).map_err(|e| anyhow!("journal get: {e}"))?;
+    let expiry: Option<i64> = row.get(11).map_err(|e| anyhow!("journal get: {e}"))?;
+    Ok(OperationRow {
+        plan_id: row.get(0).map_err(|e| anyhow!("journal get: {e}"))?,
+        intent_hash: row.get(1).map_err(|e| anyhow!("journal get: {e}"))?,
+        kind: row.get(2).map_err(|e| anyhow!("journal get: {e}"))?,
+        funding_mode: row.get(3).map_err(|e| anyhow!("journal get: {e}"))?,
+        lock_owner: row.get(4).map_err(|e| anyhow!("journal get: {e}"))?,
+        tip_height: u32::try_from(tip_height).map_err(|_| anyhow!("corrupt tip_height"))?,
+        tip_hash: row.get(6).map_err(|e| anyhow!("journal get: {e}"))?,
+        target_height: u32::try_from(target_height)
+            .map_err(|_| anyhow!("corrupt target_height"))?,
+        selected_inputs: row.get(8).map_err(|e| anyhow!("journal get: {e}"))?,
+        stage: parse_stage(&stage_s)?,
+        txid: row.get(10).map_err(|e| anyhow!("journal get: {e}"))?,
+        expiry: expiry
+            .map(|v| u32::try_from(v).map_err(|_| anyhow!("corrupt expiry")))
+            .transpose()?,
+        last_error: row.get(12).map_err(|e| anyhow!("journal get: {e}"))?,
+    })
 }
 
 fn parse_stage(s: &str) -> Result<JournalStage> {

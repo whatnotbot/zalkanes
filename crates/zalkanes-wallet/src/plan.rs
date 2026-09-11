@@ -472,6 +472,25 @@ pub struct VerifiedTransaction {
 }
 
 impl VerifiedTransaction {
+    /// Test-only constructor (crate-private, compiled only under `cfg(test)`):
+    /// lets the broadcast/recovery crash-window tests fabricate a verified
+    /// transaction without running the proving pipeline. Production code can
+    /// never construct this type except through `extract_verified`.
+    #[cfg(all(test, feature = "shielded"))]
+    pub(crate) fn test_new(
+        signed: SignedTx,
+        plan_id: String,
+        intent_hash: String,
+        verified_tip: CanonicalTip,
+    ) -> Self {
+        Self {
+            signed,
+            plan_id,
+            intent_hash,
+            verified_tip,
+        }
+    }
+
     /// The transaction id (internal byte order).
     pub fn txid(&self) -> [u8; 32] {
         self.signed.txid
