@@ -48,6 +48,8 @@ mod tamper_matrix;
 #[cfg(all(test, feature = "shielded"))]
 mod tamper_matrix_shielded;
 pub mod transparent;
+#[cfg(all(test, feature = "shielded"))]
+mod wallet_reorg_tests;
 
 pub use funding::{CanonicalTip, FundContext, FundingPool, FundingSource, FundingUtxo, TxRequest};
 pub use plan::{

@@ -216,6 +216,32 @@ impl SqliteShieldedWallet {
         let mut nullifiers = nullifiers;
         let mut height = start_height;
 
+        // Reorg detection must also cover the case where the forward loop
+        // below never runs: a same-height tip replacement, or a canonical
+        // branch SHORTER than the wallet's scanned height. Compare the
+        // wallet's stored hash at the common boundary with the canonical
+        // chain and rewind first if they disagree (or if the wallet is ahead
+        // of the canonical tip on a stale branch).
+        if let Some(prev) = prev_hash {
+            let scanned_tip = height - 1;
+            let boundary = std::cmp::min(scanned_tip, target.height);
+            let wallet_boundary_hash = if boundary == scanned_tip {
+                Some(prev)
+            } else {
+                db.get_block_hash(BlockHeight::from_u32(boundary))
+                    .map_err(|e| anyhow!("wallet block hash {boundary}: {e}"))?
+                    .map(|h| h.0)
+            };
+            let needs_rewind = scanned_tip > target.height
+                || wallet_boundary_hash != Some(chain_source.block_hash(boundary)?);
+            if needs_rewind {
+                height = rewind_to_common_ancestor(&mut db, chain_source, boundary, birthday)?;
+                nullifiers = Nullifiers::unspent(&*db)
+                    .map_err(|e| anyhow!("nullifiers after rewind: {e}"))?;
+                prev_hash = Some(chain_source.block_hash(height - 1)?);
+            }
+        }
+
         while height <= target.height {
             let from_state = chain_source.tree_state(height - 1)?;
             // Reorg check: if the wallet has a stored prior hash, it MUST match
