@@ -10,7 +10,7 @@
 | Zcash stack | `zcash_primitives` =0.30.1, `orchard` =0.15.5, `pczt` =0.9.3, `zcash_client_sqlite` =0.22.0 |
 | State store | `rocksdb` 0.22.0 |
 | Base node | Zebra **6.3.0** |
-| Protocol manifest | `protocol/v0.toml`, SHA-256 `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752` |
+| Protocol manifest | `protocol/v0.toml`, SHA-256 `06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb` |
 
 The manifest hash is compiled into the binary (`include_str!` + SHA-256) and
 exposed via `zalkanes_getInfo.protocol_manifest_hash`, so operators can detect
@@ -82,7 +82,7 @@ Run `34664098971` (workflow `release-engineering`) at the audit candidate, all j
 two independent clean builds of the SAME target are byte-identical.)
 
 Protocol manifest recorded by the same run:
-`57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752`.
+`06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb`.
 
 Re-verify for any candidate by re-running the workflow at that commit; the
 job fails if the digests diverge, so a green run IS the proof.
