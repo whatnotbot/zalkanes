@@ -5,7 +5,9 @@ Closes two mainnet hard gates that the deterministic reorg matrix could not:
 reorg**. Both run in CI on every push, against real software.
 
 Workflow: `.github/workflows/reorg.yml` (`competing-branch-regtest`).
-Passing run: **34682825442** — all three jobs `success`.
+Passing runs: **34682825442** (CASE A/B + activation boundary) and
+**34685408616** (adds CASE C and the corrected note-count APIs) — all jobs
+`success`.
 Contains no seeds, spending keys, or passphrases. The regtest seed is a
 published throwaway for an ephemeral private chain and holds no value.
 
@@ -63,27 +65,88 @@ best chain.
 | spend planner after reorg | **refuses**: `no spendable shielded notes covering 10000 zat` |
 | restart | re-verified after reopening from disk: still 0 zat |
 
-### Open observation — a stale note row survives the reorg
+### Resolved — the retained note row (was OPEN)
 
-After the reorg the spendable balance is correctly **0**, and the production
-spend planner correctly **refuses** to build any transaction. But
-`shielded_note_summary()` still reports `ironwood_notes=1` for a note whose
-block is no longer canonical.
+After the reorg the spendable balance is 0 and the production spend planner
+refuses to build anything, but a note *row* survives. **Root cause established
+from the pinned upstream source, not inferred:**
 
-- **Not a fund-safety defect on the evidence available.** Both money paths are
-  correct: `balance()` (via `get_wallet_summary`) reports 0, and
-  `select_spends` (via `select_spendable_notes`) refuses to select it. The test
-  asserts the refusal explicitly, so a regression that made the note selectable
-  would fail CI.
-- **It is a reporting discrepancy**, in a diagnostic counter that uses a
-  different upstream query (`select_unspent_notes` with `NoteRequest::Unspent`)
-  than either money path.
-- **Root cause not yet established.** It is not yet determined whether the note
-  row is retained deliberately by upstream truncation semantics (a transaction
-  that could in principle be re-mined) or is genuinely stale. For a *coinbase*
-  note it can never be re-mined, so retention would be pointless here.
-- **Status: OPEN**, recorded for the external auditor. It is deliberately not
-  written off as cosmetic without a root cause.
+`zcash_client_sqlite 0.22.0`, `truncate_to_height_internal`
+(`src/wallet.rs:4368`):
+
+```sql
+UPDATE transactions
+SET block = NULL, mined_height = NULL, tx_index = NULL, confirmed_unmined_at_height = NULL
+WHERE mined_height > :height
+```
+
+Truncation **un-mines** reorged-out transactions instead of deleting them, so
+their received-note rows survive with no mined height. This is deliberate: a
+transaction removed by a reorg may legitimately be mined again on the new
+chain.
+
+`src/wallet/common.rs:451` `select_unspent_notes` is called with upstream's
+`NoteRequest::Unspent`, documented as *"all currently unspent notes,
+**including those for which the wallet does not yet have enough information to
+construct spends**"*. Its match arm is explicit:
+
+```rust
+(NoteRequest::Unspent, false) | (_, true) => Ok(Some(note)),
+```
+
+so the note is returned even when witness availability, anchor membership and
+confirmation eligibility are all false.
+
+**Classification: A + C.** Intentional upstream retention (A), surfaced through
+a query whose name implied a canonical note count (C). **Not D** — no state
+corruption, proved by CASE C below. **Not B.**
+
+#### The bug that was ours
+
+`shielded_note_summary()` called the `Unspent` query and `wallet status`
+printed the result directly beneath `balance:`, so an un-mined orphan read as a
+canonical note. Fixed by splitting the API so neither name can be misread:
+
+| API | meaning |
+|---|---|
+| `canonical_note_summary()` | notes whose transaction is mined in canonical history — the count that belongs beside a balance |
+| `retained_note_rows()` | every retained row, reporting the un-mined count explicitly |
+
+Neither is a spend authority; `select_spends` remains the only selector.
+
+#### Money paths — proved, not assumed
+
+| path | why an orphaned note cannot affect it | proof |
+|---|---|---|
+| spendable balance | `get_wallet_summary` reports 0 | CASE A, asserted |
+| note selection | `select_spendable_notes` uses `NoteRequest::Spendable`, whose arm is `(Spendable, false) => Ok(None)` | source + CASE A asserts planning **fails** |
+| value balance, fee, change | unreachable — selection fails first, so no builder runs | CASE A |
+| anchors / witnesses | `shard_witness_available && mined_at_anchor` are false for an un-mined note; the commitment position lies beyond the truncated tree | source |
+| nullifier tracking | the nullifier stays in `NullifierQuery::Unspent`, which is **required**: it is how a re-mined spend is recognised if the branch returns | CASE C |
+| reservation ownership | locks are keyed by note id and are released through reconciliation | CASE B |
+| transaction extraction | unreachable — nothing is built | CASE A |
+| restart | re-verified after reopening from disk in all three cases | A, B, C |
+| later legitimate receipt | the row is re-mined and becomes spendable at its original value | CASE C |
+
+## CASE C — A → B → A, the note returns
+
+This is the test that shows retention is **correct**, not merely harmless. A
+third node parks branch A while it is still canonical; node A reorgs onto
+branch B; then branch A is extended past B and restored.
+
+| field | value |
+|---|---|
+| common ancestor | height **12** |
+| note block | height **13**, `fcf05d18ad7c26a290ba29e1f1953328c0e6af75ce59fa39d799e22d2b60e362` |
+| after A→B | note removed — balance **0**, `ironwood_notes=0`, branch B tip 16 |
+| after B→A | branch A restored, tip **18**, note block canonical again |
+| note value restored | **625,000,000 zat** — exactly the original |
+| retained rows after restore | `ironwood_rows=1 (unmined 0)` — re-mined, no longer un-mined |
+| production planner | **accepts it**: real v6 transaction, 1 shielded spend of 625,000,000 zat, change 624,980,000 zat to the Ironwood pool, `FullPrivacy` |
+| restart | balance preserved |
+
+A corrupt retained row — wrong value, dangling commitment position, stale
+nullifier — could not have produced a valid spend here. The row is sound.
 
 ## CASE B — a spend rolls back and the note returns
 
@@ -194,4 +257,4 @@ digests are unchanged.
 - The competing branches are short (2–45 blocks). Zebra finalises below
   1,000 blocks and the wallet's rewind has a 100-block pruning floor, so
   deeper reorgs are untested and remain out of scope.
-- The stale-note-row observation above is **open**.
+- Reorg depth is short by design; see the note above.

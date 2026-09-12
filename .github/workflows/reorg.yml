@@ -272,6 +272,7 @@ jobs:
           stop_nodes () {
             kill "$(cat /tmp/zebrad-A.pid 2>/dev/null)" 2>/dev/null || true
             kill "$(cat /tmp/zebrad-B.pid 2>/dev/null)" 2>/dev/null || true
+            kill "$(cat /tmp/zebrad-C.pid 2>/dev/null)" 2>/dev/null || true
             sleep 2
           }
           fresh_pair () {
@@ -280,6 +281,11 @@ jobs:
             start_node B 18242 18243
             wait_rpc 18232 || { tail -60 /tmp/zebrad-A.log; return 1; }
             wait_rpc 18242 || { tail -60 /tmp/zebrad-B.log; return 1; }
+          }
+          fresh_trio () {
+            fresh_pair
+            start_node C 18252 18253
+            wait_rpc 18252 || { tail -60 /tmp/zebrad-C.log; return 1; }
           }
           SH
           echo installed
@@ -304,17 +310,29 @@ jobs:
             ./target/release/examples/regtest_note_reorg case-b 2>&1 | tee /tmp/case-b.log
           grep -q "CASE B PASS" /tmp/case-b.log
 
+      - name: CASE C — A to B and back to A, the note must return
+        run: |
+          set -euo pipefail
+          source /tmp/nodes.sh
+          fresh_trio
+          rm -rf /tmp/wallet-case-c
+          ZALKANES_WALLET_DIR=/tmp/wallet-case-c \
+            ./target/release/examples/regtest_note_reorg case-c 2>&1 | tee /tmp/case-c.log
+          grep -q "CASE C PASS" /tmp/case-c.log
+
       - name: node logs
         if: always()
         run: |
           echo "── node A ──"; tail -60 /tmp/zebrad-A.log || true
           echo "── node B ──"; tail -60 /tmp/zebrad-B.log || true
+          echo "── node C ──"; tail -60 /tmp/zebrad-C.log || true
 
       - name: stop nodes
         if: always()
         run: |
           kill "$(cat /tmp/zebrad-A.pid)" 2>/dev/null || true
           kill "$(cat /tmp/zebrad-B.pid)" 2>/dev/null || true
+          kill "$(cat /tmp/zebrad-C.pid)" 2>/dev/null || true
 
   activation-boundary:
     name: live activation-boundary reorg

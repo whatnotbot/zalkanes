@@ -36,9 +36,14 @@ sha256() { shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1; }
 jqa() { jq -r "$1" "$ATTEST" 2>/dev/null; }
 
 report() { # state, name, detail
+  # UNKNOWN is NOT a pass. It marks a gate that cannot even be evaluated yet
+  # (e.g. "zero unresolved Critical findings" before any audit exists). It
+  # counts as unsatisfied exactly like BLOCKED; only the label differs, so that
+  # "not yet answerable" is never read as "answered yes".
   case "$1" in
-    PASS) printf '  [PASS]    %-46s %s\n' "$2" "$3"; PASS=$((PASS+1)) ;;
-    FAIL) printf '  [BLOCKED] %-46s %s\n' "$2" "$3"; FAIL=$((FAIL+1)) ;;
+    PASS)    printf '  [PASS]    %-46s %s\n' "$2" "$3"; PASS=$((PASS+1)) ;;
+    UNKNOWN) printf '  [UNKNOWN] %-46s %s\n' "$2" "$3"; FAIL=$((FAIL+1)) ;;
+    FAIL)    printf '  [BLOCKED] %-46s %s\n' "$2" "$3"; FAIL=$((FAIL+1)) ;;
   esac
 }
 
@@ -156,7 +161,15 @@ for key in $(jqa '.gates|keys[]'); do
   EV="$(jqa ".gates[\"$key\"].evidence")"
   EVH="$(jqa ".gates[\"$key\"].evidence_sha256")"
   NOTE="$(jqa ".gates[\"$key\"].note")"
-  if [ "$SAT" != "true" ]; then
+  PENDING="$(jqa ".gates[\"$key\"].pending_on")"
+  if [ "$SAT" != "true" ] && [ "$PENDING" != "null" ] && [ -n "$PENDING" ]; then
+    # Unanswerable until the gate it depends on is satisfied.
+    if [ "$(jqa ".gates[\"$PENDING\"].satisfied")" != "true" ]; then
+      report UNKNOWN "$key" "not answerable until '$PENDING' is satisfied"
+      continue
+    fi
+    report FAIL "$key" "${NOTE}"
+  elif [ "$SAT" != "true" ]; then
     report FAIL "$key" "${NOTE}"
   elif [ "$EV" = "null" ] || [ ! -f "$EV" ]; then
     report FAIL "$key" "claims satisfied but evidence file is missing: ${EV}"
@@ -167,7 +180,42 @@ for key in $(jqa '.gates|keys[]'); do
   fi
 done
 
-# ── 9. The activation height itself ─────────────────────────────────────────
+# ── 9. Candidate-identity binding (see audit/RELEASE-CANDIDATE-LIFECYCLE.md) ─
+#
+# protocol/v0.toml holds BOTH activation constants and the manifest hash is
+# SHA-256 over that file, so setting a mainnet activation height necessarily
+# changes the manifest hash and therefore the candidate identity. An audit of
+# the testnet candidate does NOT carry over to it.
+echo
+echo "Candidate-identity binding"
+
+AUDITED_MANIFEST="$(jqa '.audited_candidate.manifest_sha256')"
+AUDITED_COMMIT="$(jqa '.audited_candidate.commit')"
+SIGNOFF_SAT="$(jqa '.gates.auditor_final_candidate_signoff.satisfied')"
+SIGNOFF_COMMIT="$(jqa '.gates.auditor_final_candidate_signoff.final_commit')"
+SIGNOFF_MANIFEST="$(jqa '.gates.auditor_final_candidate_signoff.final_manifest_sha256')"
+
+if [ "$AUDITED_MANIFEST" = "null" ] || [ -z "$AUDITED_MANIFEST" ]; then
+  report FAIL "audited candidate identity recorded" \
+    "no candidate has been externally audited yet"
+elif [ "$AUDITED_MANIFEST" = "$GOT_MANIFEST" ] && [ "$AUDITED_COMMIT" = "$CAND_COMMIT" ]; then
+  report PASS "final candidate IS the audited candidate" "manifest ${GOT_MANIFEST:0:16}…"
+else
+  # The candidate differs from what was audited. Only an explicit sign-off on
+  # THIS candidate closes the gap.
+  if [ "$SIGNOFF_SAT" != "true" ]; then
+    report FAIL "auditor sign-off on the FINAL candidate" \
+      "candidate manifest ${GOT_MANIFEST:0:16}… differs from audited ${AUDITED_MANIFEST:0:16}…; direct sign-off or written delta confirmation required"
+  elif [ "$SIGNOFF_COMMIT" != "$CAND_COMMIT" ] || [ "$SIGNOFF_MANIFEST" != "$GOT_MANIFEST" ]; then
+    report FAIL "auditor sign-off on the FINAL candidate" \
+      "sign-off names commit ${SIGNOFF_COMMIT:0:12}…/manifest ${SIGNOFF_MANIFEST:0:16}…, not this candidate"
+  else
+    report PASS "auditor sign-off on the FINAL candidate" \
+      "names ${CAND_COMMIT:0:12}… / ${GOT_MANIFEST:0:16}…"
+  fi
+fi
+
+# ── 10. The activation height itself ────────────────────────────────────────
 echo
 echo "Final gate"
 if [ "$FAIL" -eq 0 ]; then

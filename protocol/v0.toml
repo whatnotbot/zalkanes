@@ -75,7 +75,7 @@ max_exports = 64
 
 [network]
 mainnet_activation_height = "None"
-testnet_activation_height = 4338100
+testnet_activation_height = 4346500
 regtest_activation_height = 1
 
 [upstream]

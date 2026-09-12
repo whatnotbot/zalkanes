@@ -125,11 +125,19 @@ pub const MAINNET_ACTIVATION_HEIGHT: Option<u32> = None;
 
 /// Testnet activation height.
 ///
-/// Frozen immediately before the controlled first testnet deployment (external
-/// testnet tip was 4,338,016 blocks, branch id `0x37a5165b` = Nu6.3, at freeze
-/// time). Chosen just above the current tip so Zalkanes never interprets
-/// arbitrary pre-activation testnet history as protocol messages.
-pub const TESTNET_ACTIVATION_HEIGHT: Option<u32> = Some(4_338_100);
+/// **RC2.** Re-chosen for the fresh frozen-RC activation, because the previous
+/// height (4,338,100) was frozen ~16 hours BEFORE the protocol itself was
+/// frozen, so history above it was produced by pre-freeze tooling. See
+/// `audit/TESTNET-ACTIVATION-AUDIT.md`.
+///
+/// Decision record (`audit/RC2-DECISION-RECORD.md`): measured against our own
+/// Zebra full validator at 2026-09-12T11:26:32Z, canonical testnet tip 4,340,637
+/// (`000071aa4d878924ea16a1d2bbf9d3352d982092378805b9ed37727ef5cd56d6`), giving
+/// a lead of 5,863 blocks (~5.1 days at 75 s/block).
+///
+/// Strictly above every block that existed at freeze time, so no pre-existing
+/// testnet history can be reinterpreted as protocol messages.
+pub const TESTNET_ACTIVATION_HEIGHT: Option<u32> = Some(4_346_500);
 
 /// Regtest activation height.
 pub const REGTEST_ACTIVATION_HEIGHT: Option<u32> = Some(1);

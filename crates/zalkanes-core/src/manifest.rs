@@ -45,4 +45,47 @@ mod tests {
         assert!(PROTOCOL_V0_MANIFEST.contains("version = 5"));
         assert!(PROTOCOL_V0_MANIFEST.contains("mainnet_activation_height = \"None\""));
     }
+
+    /// The manifest is the canonical statement of the activation heights, and
+    /// the code constants are what actually gate execution. If they ever drift
+    /// apart, nodes would disagree with the manifest hash they advertise.
+    #[test]
+    fn activation_heights_match_the_manifest() {
+        use crate::consensus::{
+            MAINNET_ACTIVATION_HEIGHT, REGTEST_ACTIVATION_HEIGHT, TESTNET_ACTIVATION_HEIGHT,
+        };
+
+        fn manifest_value(key: &str) -> String {
+            PROTOCOL_V0_MANIFEST
+                .lines()
+                .find_map(|l| l.strip_prefix(key)?.strip_prefix(" = ").map(str::trim))
+                .unwrap_or_else(|| panic!("manifest has no `{key}` entry"))
+                .trim_matches('"')
+                .to_string()
+        }
+
+        assert_eq!(
+            manifest_value("mainnet_activation_height"),
+            "None",
+            "mainnet must stay disabled in the manifest"
+        );
+        assert_eq!(
+            MAINNET_ACTIVATION_HEIGHT, None,
+            "mainnet must stay disabled in code"
+        );
+        assert_eq!(
+            manifest_value("testnet_activation_height")
+                .parse::<u32>()
+                .ok(),
+            TESTNET_ACTIVATION_HEIGHT,
+            "testnet activation height drifted between the manifest and the code"
+        );
+        assert_eq!(
+            manifest_value("regtest_activation_height")
+                .parse::<u32>()
+                .ok(),
+            REGTEST_ACTIVATION_HEIGHT,
+            "regtest activation height drifted between the manifest and the code"
+        );
+    }
 }

@@ -23,8 +23,10 @@
 //!
 //! CASE A — a received note disappears when its branch is removed.
 //! CASE B — a spend rolls back and the note becomes spendable again.
+//! CASE C — A -> B -> A: the note returns when its branch is restored, which
+//!          is what makes upstream's un-mine-don't-delete retention correct.
 //!
-//! Usage: `regtest_note_reorg <case-a|case-b>`
+//! Usage: `regtest_note_reorg <case-a|case-b|case-c>`
 
 #![forbid(unsafe_code)]
 
@@ -169,7 +171,10 @@ fn transplant(src: &Node, dst: &Node, from: u64, to: u64) -> Result<()> {
 struct Snapshot {
     scan_height: u32,
     balance: u64,
+    /// Notes mined in canonical history (the count that belongs beside a balance).
     notes: String,
+    /// Every retained row, including un-mined ones kept for a possible re-mine.
+    retained: String,
     tip_height: u32,
     tip_hash: String,
 }
@@ -179,7 +184,8 @@ fn snapshot(wallet: &SqliteShieldedWallet, cs: &ZebraCanonicalChainSource) -> Re
     Ok(Snapshot {
         scan_height: wallet.next_scan_height()?.saturating_sub(1),
         balance: wallet.balance()?,
-        notes: wallet.shielded_note_summary()?,
+        notes: wallet.canonical_note_summary()?,
+        retained: wallet.retained_note_rows()?,
         tip_height: tip.height,
         tip_hash: hex::encode(tip.hash),
     })
@@ -189,7 +195,8 @@ fn print_snapshot(label: &str, s: &Snapshot) {
     println!("  {label}:");
     println!("    wallet scanned to : {}", s.scan_height);
     println!("    balance           : {} zat", s.balance);
-    println!("    notes             : {}", s.notes);
+    println!("    canonical notes   : {}", s.notes);
+    println!("    retained rows     : {}", s.retained);
     println!("    canonical tip     : {}:{}", s.tip_height, s.tip_hash);
 }
 
@@ -420,14 +427,10 @@ fn case_a() -> Result<()> {
     println!("  common ancestor      : {fork}");
     println!("  branch-A note block  : {note_height} {branch_a_note_block}");
     println!("  note visible before  : yes ({} zat)", before.balance);
-    println!("  note absent after    : not spendable (0 zat); planner refuses it");
+    println!("  note absent after    : canonical notes 0, balance 0, planner refuses it");
     println!(
-        "  stale note row       : {}",
-        if orphan_reported {
-            "YES - reported by shielded_note_summary (diagnostic only)"
-        } else {
-            "no"
-        }
+        "  retained row         : {} (un-mined, intentionally kept)",
+        after.retained
     );
     println!("  canonical tip after  : {new_tip_h} {new_tip}");
     println!("  restart              : still absent");
@@ -584,11 +587,145 @@ fn case_b() -> Result<()> {
     Ok(())
 }
 
+// ── CASE C ──────────────────────────────────────────────────────────────────
+
+/// A -> B -> A. The note disappears with branch A, then comes BACK when branch
+/// A is restored as the canonical chain.
+///
+/// This is the test that justifies upstream's retention: `truncate_to_height`
+/// un-mines a reorged-out transaction instead of deleting it, precisely so the
+/// note can be re-mined correctly. If the retained row were corrupt — a wrong
+/// value, a dangling commitment position, a stale nullifier — restoring the
+/// branch would expose it here.
+///
+/// Needs a third node, because after node A reorgs onto branch B no node has
+/// branch A as its best chain any more, and Zebra can only mine on its own
+/// best tip.
+fn case_c() -> Result<()> {
+    println!("=== CASE C — A -> B -> A, the note must come back ===");
+    let h = setup(12)?;
+    let c = Node::new(
+        "node-C",
+        std::env::var("ZALKANES_NODE_C").unwrap_or_else(|_| "http://127.0.0.1:18252".into()),
+    )?;
+    if c.block_hash(0)? != h.a.block_hash(0)? {
+        bail!("node C does not share the regtest genesis");
+    }
+
+    let fork = h.a.height()?;
+    let note_height = mint_note(&h, 1)?;
+    h.wallet.scan_to_tip(&h.cs)?;
+    let before = snapshot(&h.wallet, &h.cs)?;
+    print_snapshot("BEFORE ANY REORG (branch A canonical)", &before);
+    if before.balance == 0 {
+        bail!("no shielded note was received on branch A");
+    }
+    let original_balance = before.balance;
+    let a_tip_h = h.a.height()?;
+    let a_note_block = h.a.block_hash(note_height)?;
+
+    // Park branch A on node C while it is still node A's best chain — after
+    // the reorg its blocks are no longer readable from node A.
+    println!("parking branch A (1..={a_tip_h}) on node C");
+    transplant(&h.a, &c, 1, a_tip_h)?;
+    if c.height()? != a_tip_h {
+        bail!("node C did not take the full branch A");
+    }
+
+    // A -> B
+    let (b_tip_h, _) = force_reorg(&h, fork, 4)?;
+    h.wallet.scan_to_tip(&h.cs)?;
+    let gone = snapshot(&h.wallet, &h.cs)?;
+    print_snapshot("AFTER A->B (note removed)", &gone);
+    if gone.balance != 0 || !gone.notes.ends_with("ironwood_notes=0") {
+        bail!("the note did not leave canonical history on the B branch");
+    }
+
+    // B -> A: extend branch A on node C until it outweighs branch B, then feed
+    // it back to node A.
+    let need = b_tip_h - a_tip_h + 2;
+    println!("extending branch A on node C by {need} blocks to outweigh branch B");
+    c.generate(need)?;
+    let c_tip_h = c.height()?;
+    if c_tip_h <= b_tip_h {
+        bail!("restored branch A ({c_tip_h}) does not outweigh branch B ({b_tip_h})");
+    }
+    println!("submitting the restored branch A back into node A");
+    transplant(&c, &h.a, fork + 1, c_tip_h)?;
+    std::thread::sleep(std::time::Duration::from_secs(3));
+    if h.a.height()? != c_tip_h {
+        bail!("node A did not reorg back onto branch A");
+    }
+    let restored_note_block = h.a.block_hash(note_height)?;
+    if restored_note_block != a_note_block {
+        bail!("branch A's note block is not canonical again at {note_height}");
+    }
+    println!("REORG BACK CONFIRMED: node A is on branch A again at {c_tip_h}");
+
+    h.wallet.scan_to_tip(&h.cs)?;
+    let back = snapshot(&h.wallet, &h.cs)?;
+    print_snapshot("AFTER B->A (note restored)", &back);
+    if back.balance != original_balance {
+        bail!(
+            "the note did not return at its original value: expected {original_balance} zat, \
+             got {} zat",
+            back.balance
+        );
+    }
+    if !back.notes.ends_with("ironwood_notes=1") {
+        bail!("the note is not canonical again: {}", back.notes);
+    }
+    if !back.retained.contains("(unmined 0)") {
+        bail!(
+            "rows are still un-mined after the branch was restored: {}",
+            back.retained
+        );
+    }
+
+    // The restored note must be genuinely usable, not just counted: plan a
+    // real spend against it through the production planner.
+    let op_return = zalkanes_protocol::encode_call(&zalkanes_protocol::CallMessage {
+        contract_id: zalkanes_core::types::ContractId([0x33; 32]),
+        opcode: 1,
+        input: vec![],
+    });
+    let funding = ShieldedFunding::new(Box::new(SharedWallet(Rc::clone(&h.wallet))), None);
+    let tip = h.cs.canonical_tip()?;
+    let ctx = FundContext::new(zalkanes_core::types::Network::Regtest, tip);
+    let plan = funding
+        .plan(&TxRequest::Call { op_return }, &ctx)
+        .map_err(|e| anyhow!("the restored note is not usable by the planner: {e}"))?;
+    println!("planner accepts the restored note:\n{}", plan.describe());
+    ShieldedWallet::release(&*h.wallet, plan.plan_id())?;
+
+    drop(h.wallet);
+    let reopened =
+        SqliteShieldedWallet::reopen(&h.wallet_path, ConsensusParams::Regtest, seed_from_env()?)?;
+    reopened.scan_to_tip(&h.cs)?;
+    let restarted = snapshot(&reopened, &h.cs)?;
+    print_snapshot("AFTER RESTART", &restarted);
+    if restarted.balance != original_balance {
+        bail!("the restored balance did not survive a restart");
+    }
+
+    println!();
+    println!("CASE C PASS");
+    println!("  common ancestor        : {fork}");
+    println!("  note block             : {note_height} {a_note_block}");
+    println!("  branch B tip (A->B)    : {b_tip_h}, note removed, balance 0");
+    println!("  restored branch A tip  : {c_tip_h}");
+    println!("  note after B->A        : restored, {} zat", back.balance);
+    println!("  planner                : accepts the restored note");
+    println!("  restart                : balance preserved");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let which = std::env::args().nth(1).unwrap_or_else(|| "case-a".into());
     match which.as_str() {
         "case-a" => case_a(),
         "case-b" => case_b(),
-        other => bail!("unknown case {other}; expected case-a or case-b"),
+        "case-c" => case_c(),
+        other => bail!("unknown case {other}; expected case-a, case-b or case-c"),
     }
 }

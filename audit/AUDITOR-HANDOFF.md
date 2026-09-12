@@ -7,31 +7,90 @@ Everything below is scoped to EXACTLY one immutable commit.
 | field | value |
 |---|---|
 | repository | `whatnotbot/zalkanes` |
-| audit tag | `audit-candidate-v0-rc1` |
-| tag object | `48f0b7edb4b0fe5af1d4e4d3a91bbe496adf2dc7` (annotated, **unsigned**) |
-| **commit** | **`79942f5068d91c96529f9b0c6f01bf530e4ee62d`** |
-| tree | `df1dfdc43a6524d94c7ea8e35846fd78c436d7f4` |
-| **protocol manifest hash** | **`57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752`** |
+| **audit tag** | **`audit-candidate-v0-rc2`** (annotated, **signed**) |
+| **tag object** | **`0faf702e4c3aecf4db02668d2f24d5f3bbef8c0a`** |
+| **commit** | **`ed15911d3ac39a645fd9dc064f85ce879cb729f2`** |
+| **tree** | **`86daa9d41b317d585c763c4aad05c9cece85414c`** |
+| **protocol manifest hash** | **`06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb`** |
 | `Cargo.lock` sha256 | `a8e87a4c852a876390e583e1914931aa396b32b3865ceb336bdcd998aa376199` |
-| `MAINNET_ACTIVATION_HEIGHT` | `None` |
-| testnet activation | `4_338_100` (see caveat below) |
+| `MAINNET_ACTIVATION_HEIGHT` | **`None`** |
+| testnet activation height | **`4_346_500`** (fresh; see `RC2-DECISION-RECORD.md`) |
 
 Verify independently:
 
 ```
 git fetch --tags
-git rev-list -n1 audit-candidate-v0-rc1     # 79942f50…
-git rev-parse audit-candidate-v0-rc1^{tree} # df1dfdc4…
-git show audit-candidate-v0-rc1:protocol/v0.toml | sha256sum
-git show audit-candidate-v0-rc1:Cargo.lock  | sha256sum
+git rev-parse audit-candidate-v0-rc2                # 0faf702e…  (tag object)
+git rev-list -n1 audit-candidate-v0-rc2             # ed15911d…  (commit)
+git rev-parse audit-candidate-v0-rc2^{tree}         # 86daa9d4…
+git show audit-candidate-v0-rc2:protocol/v0.toml | sha256sum   # 06e3df62…
+git show audit-candidate-v0-rc2:Cargo.lock  | sha256sum        # a8e87a4c…
+git verify-tag audit-candidate-v0-rc2
 ```
 
-The tag is **unsigned** (`verification.reason = "unsigned"`). It was NOT
-rewritten to add a signature, because re-tagging would destroy the
-immutability the candidate depends on. Integrity rests on the immutable tag
-ruleset, the recorded SHAs/digests, and reproducible builds. The eventual
-post-audit **final release tag must be signed** or carry equivalent
-attestation.
+### Signature status — read this
+
+The tag **is** cryptographically signed (SSH, ED25519) and verifies locally:
+
+```
+Good "git" signature for shardulmahadik74@gmail.com
+  with ED25519 key SHA256:Z1Ylo2qnF3Q9VzaHO/gKjFyzN3FpEqwtKvNZ3Z63Mvo
+```
+
+`git verify-tag` needs an allowed-signers file mapping that email to that key.
+
+**GitHub currently reports `verified: false`, `reason: "unknown_key"`**, because
+the signing public key is not yet registered as an *SSH signing key* on the
+owner's GitHub account. This is a key-registration gap, not a bad signature.
+The tag will **not** be recreated to fix it — registering the key resolves it
+retroactively. Confirm the fingerprint above out of band before relying on it.
+
+### Supersedes RC1
+
+`audit-candidate-v0-rc1` (`48f0b7ed…` → `79942f50…`, manifest `57178628…`,
+unsigned) remains **immutable and untouched**. It is superseded, not replaced.
+RC2 differs from it by the fresh testnet activation height and the readiness
+work merged in between; `Cargo.lock` is byte-identical.
+
+### Provenance caveat — no independent human review
+
+Recorded deliberately, because provenance matters to an audit: the readiness
+work (PR #2) and this activation change (PR #3) were merged with **zero
+submitted reviews**. The repository's required approving review count was
+changed from 1 to 0 by the owner, who then merged both. No independent human
+review of this code has taken place. Treat the entire candidate as
+unreviewed-by-a-second-party.
+
+## Reproducible artifacts (built from this exact commit)
+
+| target | sha256 | size |
+|---|---|---|
+| `x86_64-unknown-linux-gnu` | `6e95c3d860e85655630a99aa04a0dbaa4db2016c66c42c6b12522d5367c181f5` | 32,532,080 B |
+| `aarch64-unknown-linux-gnu` | `3851a80ef6e502a3d56b1e664477aba7ef2e9de57e17a86b1b756d3f70144606` | 30,188,200 B |
+
+Each target ships **14 CycloneDX SBOMs** (one per workspace crate) plus
+`SHA256SUMS` and `MANIFEST.txt`. Both `MANIFEST.txt` files record source commit
+`ed15911d…`, `SOURCE_DATE_EPOCH=1700000000`, rustc/cargo `1.88.0`, protocol
+manifest `06e3df62…`, and `reproducible: yes (two independent clean builds
+byte-identical)`. Digests above were recomputed from the downloaded artifacts,
+and each `SHA256SUMS` self-check passes.
+
+## CI on the tagged commit
+
+All checks green on `ed15911d3ac39a645fd9dc064f85ce879cb729f2`:
+
+| run | checks |
+|---|---|
+| `34693179218` | fmt + clippy + test · shielded wallet (clippy + test) · cargo deny · contract builds (wasm32) |
+| `34693179179` | native ARM64 Linux (debug + release) |
+| `34693179173` | live zebrad regtest (pinned v6.3.0) |
+| `34693179249` | reproducible build (x86_64) · reproducible build (aarch64) · real disk-full (ext4 loopback) |
+
+The competing-branch reorg workflow does not trigger on pushes to `main`. It
+was green on PR #3's head `cf182528ce8c2a4bd1af1e0ee662727eb2e7c879`
+(runs `34691807957` — competing-chain probe, live note-level wallet reorg, live
+activation-boundary reorg), whose **tree is byte-identical** to the tagged
+commit's tree `86daa9d4…`. Stated explicitly rather than implied.
 
 ## Toolchain and pins
 
@@ -110,41 +169,75 @@ hash), and **14 CycloneDX SBOMs** (`*.cdx.json`, one per workspace crate).
   byte equality, and a shielded-funded PREPARE → transparent carrier DEPLOY
   producing a fresh contract executed 0→1→2.
 
-## Priority areas for review
+## Audit scope
 
-1. consensus parser / carrier parsing
-2. WASM determinism and fuel metering
-3. state-root construction
-4. rollback / undo-journal correctness
-5. database atomicity
-6. transaction construction
-7. `VerifiedPczt` / `VerifiedTransaction` type-state boundaries
-8. fee and value-balance verification
-9. shielded change / spend / nullifier / anchor binding
-10. journal and note-lock recovery
-11. `BroadcastUnknown` handling
-12. wallet key custody
-13. reorg handling
-14. activation-boundary semantics
+The engagement must cover all of the following. Items marked **new** were
+added after the live competing-branch reorg work.
 
-## OPEN HARD GATES — please read before concluding
+1. consensus parser and carrier reconstruction
+2. protocol wire canonicality
+3. ContractId derivation
+4. WASM validation and determinism
+5. wasmi fuel schedule and metering
+6. state-root construction
+7. block / transaction / message ordering
+8. rollback and undo-journal correctness
+9. RocksDB atomicity and crash behaviour
+10. full-block wallet scanner
+11. `WalletDb` reorg behaviour
+12. **new** — orphaned-note retention and query semantics (see below)
+13. `CanonicalChainSource` freshness boundary
+14. `VerifiedPczt` / `VerifiedTransaction` type-state
+15. fee and value balance
+16. shielded spends and change
+17. note reservations and `BroadcastUnknown`
+18. custody, unlock, restart
+19. CLI money-moving confirmation boundaries
+20. activation semantics
+21. release-candidate identity (see `RELEASE-CANDIDATE-LIFECYCLE.md`)
+22. reproducible builds and supply-chain controls
 
-1. **Live note-level competing-branch reorg is OPEN.** A shielded note
-   received on a removed branch disappearing, and a spend rolling back, have
-   **not** been observed against a live node. Inducing this requires
-   constructing and submitting a competing chain; that machinery does not
-   exist in this repository. The deterministic wallet reorg matrix is
-   supporting evidence, **not a substitute**. See `REGTEST-CLASSIFICATION.md`.
-2. **Activation-boundary live reorg is OPEN** (rollback below the
-   pre-activation fast-forward point).
-3. **Fresh post-freeze frozen-RC public-testnet activation is OPEN.** The
-   existing testnet activation height predates the final protocol freeze, so
-   the current live evidence is **frozen-CODE acceptance**, NOT a fresh
-   frozen-RC activation. See `TESTNET-ACTIVATION-AUDIT.md`.
-4. **External security audit is OPEN** — this document is its starting point.
+### Note on item 12
 
-Any Critical or High finding is a hard blocker. Fixes produce
-`audit-candidate-v0-rc2` at a new commit; **rc1 is never rewritten.**
+`truncate_to_height` in `zcash_client_sqlite 0.22.0` **un-mines** reorged-out
+transactions rather than deleting them, so received-note rows survive a reorg
+with no mined height. We investigated this to root cause and concluded it is
+intentional upstream retention, with no money path affected; the diagnostic API
+was split into `canonical_note_summary()` and `retained_note_rows()` so the two
+can never be confused. The reasoning and the live A→B→A proof are in
+`LIVE-REORG-EVIDENCE.md`. **Please review that conclusion independently** — it
+is the kind of finding where our own analysis is the thing most worth checking.
+
+## Status of the hard gates
+
+1. **Live note-level competing-branch reorg — CLOSED.** Two real pinned
+   zebrad v6.3.0 nodes, a real shielded coinbase note, a real spend, and Zebra's
+   own best-work reorg. CASE A (note disappears), CASE B (spend rolls back),
+   CASE C (A→B→A, the note returns and is spendable again). See
+   `LIVE-REORG-EVIDENCE.md`.
+2. **Activation-boundary live reorg — CLOSED.** Fork below the activation
+   height; persisted root == restart root == clean-reindex root.
+3. **Fresh post-freeze frozen-RC public-testnet activation — OPEN.** The
+   existing testnet activation height predates the final protocol freeze, so the
+   current live evidence is **frozen-CODE acceptance**, NOT a fresh frozen-RC
+   activation. See `TESTNET-ACTIVATION-AUDIT.md` and `RC2-DECISION-RECORD.md`.
+4. **External security audit — OPEN.** This document is its starting point.
+
+Any Critical or High finding is a hard blocker. Fixes produce a NEW candidate
+at a new commit; **rc1 is never rewritten.**
+
+### Which candidate this document describes
+
+Today it describes **RC1** (`79942f50…`, manifest `57178628…`). The intended
+audit target is **RC2**, which does not exist yet: it requires the readiness
+work to be merged and a fresh testnet activation height, which changes the
+manifest hash and therefore the candidate identity. This document must be
+re-pointed at RC2's exact tag, commit, tree, manifest hash and CI runs before
+the engagement begins.
+
+Because `protocol/v0.toml` carries the mainnet activation constant too, an
+audit of RC2 does **not** transfer to the final mainnet candidate. See
+`RELEASE-CANDIDATE-LIFECYCLE.md`.
 
 ## Mainnet status
 
