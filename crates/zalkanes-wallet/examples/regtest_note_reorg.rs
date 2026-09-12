@@ -361,6 +361,21 @@ fn case_a() -> Result<()> {
             after.balance
         );
     }
+    // The note's block must be gone from canonical history...
+    let canonical_at_note_height = h.a.block_hash(note_height)?;
+    if canonical_at_note_height == branch_a_note_block {
+        bail!("branch A's note block is still canonical at {note_height}");
+    }
+    // ...and the note must be gone from the wallet, not merely unspendable.
+    // A note row that survives its own block is a stale row.
+    if !after.notes.ends_with("ironwood_notes=0") {
+        bail!(
+            "the branch-A note row survived the reorg: {} (balance is {} zat, so it is \
+             not spendable, but the note is still reported as unspent)",
+            after.notes,
+            after.balance
+        );
+    }
     if after.scan_height as u64 != new_tip_h
         || after.tip_hash != {
             let mut v = hex::decode(&new_tip)?;
