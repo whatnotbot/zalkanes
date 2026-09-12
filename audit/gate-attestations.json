@@ -66,7 +66,7 @@
       "satisfied": false,
       "evidence": null,
       "evidence_sha256": null,
-      "note": "audit/MAINNET-ACTIVATION-RUNBOOK.md must be reviewed and signed off by the owner."
+      "note": "No MAINNET activation runbook exists yet. audit/TESTNET-ACTIVATION-RUNBOOK.md covers the testnet activation only; the mainnet one must be written and signed off by the owner before this gate can close."
     },
     "mainnet_canary_owner_approved": {
       "satisfied": false,
