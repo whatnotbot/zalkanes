@@ -666,7 +666,7 @@ mod lifecycle_tests {
             "{} {} {}",
             w.unified_address().unwrap(),
             w.birthday_height().unwrap(),
-            w.shielded_note_summary().unwrap_or_default()
+            w.canonical_note_summary().unwrap_or_default()
         );
         assert!(!printable.contains(&hex::encode(&raw)));
         drop(w);

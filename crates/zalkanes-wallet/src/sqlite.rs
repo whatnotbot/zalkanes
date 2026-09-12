@@ -444,8 +444,12 @@ impl SqliteShieldedWallet {
         }
     }
 
-    /// A one-line summary of the wallet's unspent shielded notes by pool.
-    pub fn shielded_note_summary(&self) -> Result<String> {
+    /// Per-pool counts of retained note rows, split by whether the note's
+    /// transaction is currently mined in canonical history.
+    ///
+    /// Returns `(orchard_canonical, orchard_unmined, ironwood_canonical,
+    /// ironwood_unmined)`.
+    fn note_counts(&self) -> Result<(usize, usize, usize, usize)> {
         let db = self.db.borrow_mut();
         let notes = db
             .select_unspent_notes(
@@ -456,10 +460,64 @@ impl SqliteShieldedWallet {
                 LockFilter::Policy(&LockedInputPolicy::Exclude),
             )
             .map_err(|e| anyhow!("unspent notes: {e:?}"))?;
+        let o_c = notes
+            .orchard()
+            .iter()
+            .filter(|n| n.mined_height().is_some())
+            .count();
+        let o_u = notes.orchard().len() - o_c;
+        let i_c = notes
+            .ironwood()
+            .iter()
+            .filter(|n| n.mined_height().is_some())
+            .count();
+        let i_u = notes.ironwood().len() - i_c;
+        Ok((o_c, o_u, i_c, i_u))
+    }
+
+    /// Notes that exist in **canonical history** — the count that belongs next
+    /// to [`Self::balance`].
+    ///
+    /// A note is counted here only when its transaction is currently mined on
+    /// the canonical chain. Notes whose block was removed by a reorg are
+    /// deliberately excluded; see [`Self::retained_note_rows`] for why they
+    /// still exist in the database at all.
+    ///
+    /// This is a **diagnostic**. It is not the spend selector and must never be
+    /// used to decide what can be spent: a canonical note can still be
+    /// unspendable for want of confirmations or witness data. The authority on
+    /// spendability is `select_spends`, which goes through
+    /// `select_spendable_notes`.
+    pub fn canonical_note_summary(&self) -> Result<String> {
+        let (o_c, _, i_c, _) = self.note_counts()?;
+        Ok(format!("orchard_notes={o_c} ironwood_notes={i_c}"))
+    }
+
+    /// Every unspent note ROW the database retains, including notes whose
+    /// transaction is currently **un-mined**.
+    ///
+    /// Upstream `truncate_to_height` un-mines transactions above the truncation
+    /// height rather than deleting them (`UPDATE transactions SET block = NULL,
+    /// mined_height = NULL ... WHERE mined_height > :height`), because a
+    /// transaction removed by a reorg may legitimately be mined again on the
+    /// new chain. Its output rows are therefore kept, with no mined height.
+    ///
+    /// `select_unspent_notes` uses upstream's `NoteRequest::Unspent`, which is
+    /// documented to include "notes for which the wallet does not yet have
+    /// enough information to construct spends" — so those un-mined rows appear
+    /// here. That is retention, not corruption, and it is what allows a note to
+    /// come back correctly if its branch is restored.
+    ///
+    /// Reporting this count next to a balance is misleading, which is exactly
+    /// why it is a separate, explicitly named function.
+    pub fn retained_note_rows(&self) -> Result<String> {
+        let (o_c, o_u, i_c, i_u) = self.note_counts()?;
         Ok(format!(
-            "orchard_notes={} ironwood_notes={}",
-            notes.orchard().len(),
-            notes.ironwood().len()
+            "orchard_rows={} (unmined {}) ironwood_rows={} (unmined {})",
+            o_c + o_u,
+            o_u,
+            i_c + i_u,
+            i_u
         ))
     }
 
