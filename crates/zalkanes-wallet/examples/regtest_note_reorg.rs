@@ -197,9 +197,13 @@ fn seed_from_env() -> Result<SecretVec<u8>> {
     // Deterministic throwaway regtest seed. This is a TEST seed for an
     // ephemeral regtest chain and holds no real value.
     let hex_seed = std::env::var("ZALKANES_REGTEST_SEED").unwrap_or_else(|_| {
-        "5a616c6b616e657352656774657374536565643031323334353637383941424344".to_string()
+        "5a616c6b616e6573526567746573745365656430313233343536373839414243".to_string()
     });
-    Ok(SecretVec::new(hex::decode(hex_seed.trim())?))
+    let bytes = hex::decode(hex_seed.trim())?;
+    if bytes.len() != 32 {
+        bail!("regtest seed must be 32 bytes, got {}", bytes.len());
+    }
+    Ok(SecretVec::new(bytes))
 }
 
 // ── Shared setup ────────────────────────────────────────────────────────────

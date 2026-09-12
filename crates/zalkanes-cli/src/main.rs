@@ -363,6 +363,38 @@ async fn node_status() -> Result<()> {
 
 // ── node serve (real indexing loop) ──────────────────────────────────────────
 
+/// Read `ZALKANES_REGTEST_ACTIVATION_HEIGHT`, which exists so regtest boundary
+/// tests can put blocks *below* the activation height (the manifest pins
+/// regtest activation at 1, leaving no room).
+///
+/// Setting it on any real network is a hard error rather than a silent no-op:
+/// an operator who believes they can move mainnet's activation with an
+/// environment variable must find out immediately.
+fn regtest_activation_override(network: Network) -> Result<Option<u32>> {
+    let Ok(raw) = std::env::var("ZALKANES_REGTEST_ACTIVATION_HEIGHT") else {
+        return Ok(None);
+    };
+    if network != Network::Regtest {
+        anyhow::bail!(
+            "ZALKANES_REGTEST_ACTIVATION_HEIGHT is set but the network is {network:?}. \
+             Activation heights for real networks are fixed by the protocol manifest and \
+             cannot be overridden. Unset this variable."
+        );
+    }
+    let height: u32 = raw
+        .trim()
+        .parse()
+        .map_err(|e| anyhow::anyhow!("ZALKANES_REGTEST_ACTIVATION_HEIGHT is not a height: {e}"))?;
+    if height == 0 {
+        anyhow::bail!("ZALKANES_REGTEST_ACTIVATION_HEIGHT must be >= 1");
+    }
+    tracing::warn!(
+        height,
+        "regtest activation height overridden (regtest only; manifest unchanged)"
+    );
+    Ok(Some(height))
+}
+
 async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<()> {
     let port = port
         .or_else(|| std::env::var("PORT").ok().and_then(|p| p.parse().ok()))
@@ -382,6 +414,7 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
     let config = IndexerConfig {
         network,
         data_dir: dir.clone(),
+        regtest_activation_override: regtest_activation_override(network)?,
     };
 
     // Validate upstream connection + fetch initial tip, retrying with backoff

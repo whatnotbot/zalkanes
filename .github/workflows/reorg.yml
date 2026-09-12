@@ -315,3 +315,124 @@ jobs:
         run: |
           kill "$(cat /tmp/zebrad-A.pid)" 2>/dev/null || true
           kill "$(cat /tmp/zebrad-B.pid)" 2>/dev/null || true
+
+  activation-boundary:
+    name: live activation-boundary reorg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    env:
+      ZEBRAD_RELEASE: 6.3.0
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      # Regtest-only. The manifest pins regtest activation at 1, which leaves
+      # no blocks below the boundary to test with.
+      ZALKANES_REGTEST_ACTIVATION_HEIGHT: 120
+      ZALKANES_NETWORK: regtest
+      ZALKANES_ZCASH_RPC_URL: http://127.0.0.1:18232
+      ZALKANES_SIGNING_KEY: 0101010101010101010101010101010101010101010101010101010101010101
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build the CLI and the counter contract
+        run: |
+          set -euo pipefail
+          cargo build --release -p zalkanes-cli
+          cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/counter/Cargo.toml
+          ls -l target/wasm32-unknown-unknown/release/*.wasm
+
+      - name: fetch pinned zebrad release (verified checksum)
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/ZcashFoundation/zebra/releases/download/v${ZEBRAD_RELEASE}"
+          FILE="zebrad-${ZEBRAD_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSLO "$BASE/$FILE"
+          curl -sSLO "$BASE/$FILE.sha256"
+          sha256sum -c "$FILE.sha256"
+          tar xzf "$FILE"
+          find . -name zebrad -type f -exec cp {} /usr/local/bin/zebrad \;
+          chmod +x /usr/local/bin/zebrad
+          zebrad --version
+
+      - name: refuse the override on a real network
+        run: |
+          set -euo pipefail
+          # The override must be a hard error off regtest, not a silent no-op.
+          if ZALKANES_NETWORK=testnet ./target/release/zalkanes node serve --port 3999 2>/tmp/guard.txt; then
+            echo "::error::testnet accepted a regtest activation override"; exit 1
+          fi
+          cat /tmp/guard.txt
+          grep -q "cannot be overridden" /tmp/guard.txt
+          echo "GUARD OK: the override is refused off regtest"
+
+      - name: start two isolated regtest nodes
+        run: |
+          set -euo pipefail
+          start_node () {
+            NAME="$1"; RPC="$2"; P2P="$3"
+            rm -rf "/tmp/zebra-$NAME"; mkdir -p "/tmp/zebra-$NAME"
+            cat > "/tmp/zebra-$NAME/zebrad.toml" <<ZCFG
+          [network]
+          network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
+          listen_addr = "127.0.0.1:$P2P"
+          initial_mainnet_peers = []
+          initial_testnet_peers = []
+          cache_dir = "/tmp/zebra-$NAME/net"
+
+          [state]
+          cache_dir = "/tmp/zebra-$NAME/state"
+          ephemeral = true
+
+          [sync]
+          checkpoint_verify_concurrency_limit = 2
+          download_concurrency_limit = 2
+
+          [consensus]
+          checkpoint_sync = false
+
+          [rpc]
+          listen_addr = "127.0.0.1:$RPC"
+          enable_cookie_auth = false
+
+          [mining]
+          internal_miner = false
+          miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
+          ZCFG
+            zebrad -c "/tmp/zebra-$NAME/zebrad.toml" start > "/tmp/zebrad-$NAME.log" 2>&1 &
+            echo $! > "/tmp/zebrad-$NAME.pid"
+          }
+          start_node A 18232 18233
+          start_node B 18242 18243
+          for P in 18232 18242; do
+            for i in $(seq 1 90); do
+              curl -s -m 2 -X POST "http://127.0.0.1:$P" -H 'Content-Type: application/json' \
+                -d '{"jsonrpc":"1.0","id":"ci","method":"getblockchaininfo","params":[]}' \
+                | grep -q '"chain"' && { echo "RPC $P up"; break; }
+              sleep 1
+            done
+          done
+
+      - name: run the activation-boundary reorg
+        run: |
+          set -euo pipefail
+          bash scripts/activation-boundary-reorg.sh 2>&1 | tee /tmp/activation.log
+          grep -q "ACTIVATION BOUNDARY REORG PASS" /tmp/activation.log
+
+      - name: logs
+        if: always()
+        run: |
+          echo "── node A ──"; tail -40 /tmp/zebrad-A.log || true
+          echo "── node B ──"; tail -40 /tmp/zebrad-B.log || true
+          echo "── indexer ──"; tail -60 /tmp/indexer.log || true
+          echo "── reindex ──"; tail -30 /tmp/reindex.log || true
+
+      - name: stop everything
+        if: always()
+        run: |
+          kill "$(cat /tmp/zebrad-A.pid)" 2>/dev/null || true
+          kill "$(cat /tmp/zebrad-B.pid)" 2>/dev/null || true
+          pkill -f "zalkanes node serve" 2>/dev/null || true
