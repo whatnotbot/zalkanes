@@ -65,7 +65,11 @@ impl ZebraCanonicalChainSource {
         // Bounded retry for TRANSPORT failures only. A JSON-RPC error reply is
         // a real answer and is never retried; only connection/timeout errors
         // are, so a single dropped connection cannot abort a long scan.
-        const MAX_ATTEMPTS: u32 = 5;
+        // Exponential backoff spanning ~15s in total. A wallet scan makes
+        // thousands of sequential calls; a node or host that briefly runs out
+        // of sockets/handles must not abort the whole scan, and 5 attempts
+        // over ~1.5s proved too short under sustained load.
+        const MAX_ATTEMPTS: u32 = 8;
         let mut last_transport_err = String::new();
         for attempt in 0..MAX_ATTEMPTS {
             match self
@@ -90,7 +94,7 @@ impl ZebraCanonicalChainSource {
                     last_transport_err = e.to_string();
                     if attempt + 1 < MAX_ATTEMPTS {
                         std::thread::sleep(std::time::Duration::from_millis(
-                            100 * u64::from(attempt + 1),
+                            100u64 << attempt.min(7),
                         ));
                     }
                 }
