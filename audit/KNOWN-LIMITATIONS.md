@@ -62,13 +62,25 @@ should confirm whether any of these change the security conclusion.
   byte-identical (x86_64 + aarch64 Linux); see `BUILD-REPRODUCIBILITY.md`
   for the recorded digests.
 
-## Live regtest reorg
+## Live regtest
 
-- The `live-zebra-regtest` workflow runs a real pinned zebrad v6.3.0 and
-  covers live scanning, custody, lock enforcement, and dry-run. **Note-level
-  reorg evidence** (a note on a removed branch disappearing, a spend rolling
-  back) additionally requires constructing and submitting a COMPETING chain,
-  which this repo has no machinery for. Open.
+- The `live-zebra-regtest` workflow is **GREEN** against a real pinned
+  zebrad v6.3.0: wallet create against a real treestate, restore at an
+  explicit birthday, scanning real blocks, scanned identity == canonical
+  tip, advancing-tip tracking, restart identity, LOCKED refusal of a
+  shielded spend, unlock/lock, and dry-run hygiene.
+- **Note-level branch reorg remains uncovered** (a note on a removed
+  branch disappearing, a spend rolling back): inducing it requires
+  constructing and submitting a COMPETING chain, machinery this repo does
+  not have. Classification E. **Mainnet blocker.** Full evidence and the
+  four bugs this workflow found: `REGTEST-CLASSIFICATION.md`.
+- A per-process request ceiling in the CI environment stalls a ~100-block
+  scan at a fixed point (node verified healthy via identical curl
+  requests); the workflow scopes its scan inside that ceiling. Documented
+  in `REGTEST-CLASSIFICATION.md`.
+- `z_gettreestate` at **genesis** (height 0) returns a body the wallet
+  deserializer rejects. Reachable only with a birthday of 0, i.e. a chain
+  shorter than 100 blocks. Tracked; not a release blocker.
 
 ## Testnet activation
 

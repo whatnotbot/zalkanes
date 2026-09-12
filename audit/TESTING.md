@@ -48,10 +48,40 @@ builds`, `cargo-deny` — all must be green. See `.github/workflows/ci.yml`.
 - Wallet reorg matrix incl. same-height/shorter-branch detection fix
   (`crates/zalkanes-wallet/src/wallet_reorg_tests.rs`).
 
-## Not yet run (release-blocking)
+## Completed since the previous revision
 
-- Activation-boundary reorg test (live regtest environment required).
-- Real disk-full behavior (no loop-device support in the dev environment).
-- Native ARM64-Linux / non-emulated x86_64-macOS determinism runs.
-- Live regtest note-level reorg evidence (removed-branch note/spend).
-- External security audit.
+- **Real disk-full**: CI mounts a 48 MiB ext4 loopback and fills it —
+  163 commits, then a loud failure, then a clean refusal to reopen
+  (`release-engineering` workflow, `tests/disk_full.rs`).
+- **Native ARM64 Linux determinism**: `arm64-determinism` workflow on
+  GitHub-hosted `ubuntu-24.04-arm`, debug + release, including the
+  committed execution vectors.
+- **Live zebrad regtest baseline**: `live-zebra-regtest` runs the pinned
+  zebrad v6.3.0 and is GREEN — wallet create against a real treestate,
+  restore at an explicit birthday, scanning real blocks, scanned identity
+  == canonical tip, advancing-tip tracking, restart identity, LOCKED
+  refusal of a shielded spend, unlock/lock, EPIPE handling, dry-run
+  hygiene. See `REGTEST-CLASSIFICATION.md`.
+- **Reproducible builds**: two clean builds byte-identical per target
+  (`BUILD-REPRODUCIBILITY.md`).
+- **CLI acceptance**: 12 tests against the real binary.
+- **Key custody**: 16 tests (keystore + lifecycle).
+
+## Not yet run
+
+- **Live note-level branch reorg** (a note on a removed branch
+  disappearing; a spend rolling back). Requires competing-chain
+  construction/submission machinery that does not exist in this repo.
+  Classification E. **Mainnet blocker.**
+- **Activation-boundary reorg test** (rollback below the pre-activation
+  fast-forward point). Mainnet blocker.
+- **Fresh frozen-RC public testnet activation** — see
+  `TESTNET-ACTIVATION-AUDIT.md`. Requires explicit approval. Mainnet
+  blocker.
+- **Genesis-height treestate** handling: `z_gettreestate` at height 0
+  returns a body the wallet deserializer rejects. Only reachable with a
+  birthday of 0 (a chain shorter than 100 blocks). Not a release blocker;
+  tracked.
+- **Non-emulated x86_64-macOS** determinism. Not a release blocker given
+  native x86_64 Linux CI coverage.
+- **External security audit** — hard mainnet gate.
