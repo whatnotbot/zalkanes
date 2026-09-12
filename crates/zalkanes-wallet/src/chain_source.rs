@@ -36,13 +36,12 @@ impl ZebraCanonicalChainSource {
     pub fn new(rpc_url: impl Into<String>, network: ConsensusParams) -> Result<Self> {
         let client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(60))
-            // A wallet scan issues many rapid sequential RPCs. Reusing a
-            // keep-alive connection the node has already closed surfaces as
-            // "error sending request", aborting a scan mid-flight. Keeping no
-            // idle connections avoids that race entirely; the cost is one
-            // extra local TCP handshake per call against a loopback/private
-            // node.
-            .pool_max_idle_per_host(0)
+            // Keep connections pooled. A wallet scan issues thousands of
+            // rapid sequential RPCs; opening a fresh TCP connection per call
+            // churns ephemeral ports and made scans fail sooner in CI. This
+            // pooled configuration is the one that resynced 1,435 live
+            // testnet blocks successfully.
+            .pool_idle_timeout(std::time::Duration::from_secs(90))
             .build()
             .map_err(|e| anyhow!("build http client: {e}"))?;
         Ok(Self {
@@ -97,7 +96,13 @@ impl ZebraCanonicalChainSource {
                 }
             }
         }
-        bail!("rpc {method}: {last_transport_err} (after {MAX_ATTEMPTS} attempts)")
+        bail!(
+            "rpc {method}{}: {last_transport_err} (after {MAX_ATTEMPTS} attempts)",
+            match serde_json::to_string(&params) {
+                Ok(p) if p.len() <= 64 => format!(" {p}"),
+                _ => String::new(),
+            }
+        )
     }
 }
 
