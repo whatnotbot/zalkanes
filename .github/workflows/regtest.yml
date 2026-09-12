@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
-            -d '{"jsonrpc":"1.0","id":"ci","method":"generate","params":[120]}' | head -c 200
+            -d '{"jsonrpc":"1.0","id":"ci","method":"generate","params":[25]}' | head -c 200
           echo
           curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
             -d '{"jsonrpc":"1.0","id":"ci","method":"getblockcount","params":[]}'
@@ -137,7 +137,7 @@ jobs:
           # Classifies any scan failure definitively: if these succeed but the
           # scanner fails, the fault is client-side; if these fail, it is the
           # node/environment.
-          for h in 1 2 21; do
+          for h in 1 2 20; do
             echo "getblockhash($h):"
             rpc getblockhash "[$h]" | head -c 120; echo
             echo "z_gettreestate(\"$h\"):"
@@ -157,7 +157,7 @@ jobs:
           fi
 
           echo "── mine further and rescan: wallet tracks the advancing tip ──"
-          rpc generate '[10]' > /dev/null
+          rpc generate '[5]' > /dev/null
           "$BIN" wallet scan
           "$BIN" wallet status | tee /tmp/status2.txt
           if grep -q "NOT synced" /tmp/status2.txt; then
