@@ -113,11 +113,12 @@ re-runs clean; zero unresolved findings.
 
 ## Preserved gaps (honest)
 
-- **Live note-level reorg evidence** (a shielded note received on a removed
-  branch disappearing; a spend rolling back). The `live-zebra-regtest`
-  workflow runs a real pinned zebrad v6.3.0 and covers live scanning and
-  custody, but inducing a reorg additionally requires constructing and
-  submitting a COMPETING chain — machinery this repo does not have yet.
+- ~~**Live note-level reorg evidence**~~ — **CLOSED**. The competing-chain
+  machinery now exists: two real zebrad v6.3.0 nodes, a real shielded coinbase
+  note, a real spend, and a real best-work reorg. See
+  `audit/LIVE-REORG-EVIDENCE.md` (CI run 34682825442). One OPEN observation
+  (a stale note row) is recorded there. Still regtest only — the public
+  testnet has never been deliberately reorganised.
 - **Fresh frozen-RC testnet activation** — see `TESTNET-ACTIVATION-AUDIT.md`.
   Not performed; requires explicit approval.
 - **Non-emulated x86_64-macOS** runs (native x86_64 Linux is covered by CI).
