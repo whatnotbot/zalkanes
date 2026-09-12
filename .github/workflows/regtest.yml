@@ -209,20 +209,14 @@ jobs:
 
           echo "LIVE REGTEST BASELINE OK"
 
-      - name: classify the note-level branch-reorg gap
+      - name: note-level branch reorg is covered elsewhere
         run: |
           echo "Live baseline above is GREEN against a real pinned zebrad."
           echo
-          echo "NOT covered here: note-level BRANCH REORG (a shielded note"
-          echo "received on a removed branch disappearing; a spend rolling back)."
-          echo "Inducing that requires building and submitting a COMPETING chain"
-          echo "with more work than the canonical one. Zebra exposes submitblock,"
-          echo "but constructing valid competing regtest blocks is machinery this"
-          echo "repository does not have. The deterministic wallet-side matrix in"
-          echo "crates/zalkanes-wallet/src/wallet_reorg_tests.rs exercises the real"
-          echo "rewind/rescan code against fabricated competing chains, which is"
-          echo "NOT a substitute for observing a live node reorganise."
-          echo "Classification: E (expected absence of competing-chain machinery)."
+          echo "Note-level BRANCH REORG is no longer a gap: the"
+          echo "competing-branch-regtest workflow builds a genuine competing"
+          echo "chain with a second zebrad and lets Zebra reorganise onto it."
+          echo "See .github/workflows/reorg.yml and audit/LIVE-REORG-EVIDENCE.md."
 
       - name: node log tail
         if: always()

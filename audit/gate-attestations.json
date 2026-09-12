@@ -15,16 +15,16 @@
   },
   "gates": {
     "live_note_level_reorg": {
-      "satisfied": false,
-      "evidence": null,
-      "evidence_sha256": null,
-      "note": "Requires the real competing-branch regtest harness, not the deterministic matrix."
+      "satisfied": true,
+      "evidence": "audit/LIVE-REORG-EVIDENCE.md",
+      "evidence_sha256": "ea9b0ab425689435a3e43f4326450b51dd6af794a31c6cdea42aeedf94172d85",
+      "note": "CI run 34682825442, two real zebrad v6.3.0 nodes. One OPEN observation recorded in the evidence (stale note row)."
     },
     "activation_boundary_reorg": {
-      "satisfied": false,
-      "evidence": null,
-      "evidence_sha256": null,
-      "note": "Live reorg across the Zalkanes activation height on regtest."
+      "satisfied": true,
+      "evidence": "audit/LIVE-REORG-EVIDENCE.md",
+      "evidence_sha256": "ea9b0ab425689435a3e43f4326450b51dd6af794a31c6cdea42aeedf94172d85",
+      "note": "CI run 34682825442. Fork below the activation height; persisted == restart == clean-reindex root."
     },
     "fresh_frozen_rc_testnet_activation": {
       "satisfied": false,
