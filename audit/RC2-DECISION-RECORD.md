@@ -1,44 +1,62 @@
 # RC2 activation-height decision record
 
-**STATUS: MEASURED AND PROPOSED. NOT COMMITTED. RC2 NOT CREATED.**
+**STATUS: HEIGHT CHOSEN AND FROZEN INTO THE CANDIDATE. NOT DEPLOYED.**
 
-No file in `protocol/` has been modified. No tag has been created. No
-deployment has happened.
+`protocol/v0.toml` now carries the new testnet activation height. Nothing has
+been deployed to the public testnet and no transaction has been broadcast.
 
-## Why RC2 does not exist yet
+## Decision — re-measured at freeze time
 
-`audit/RELEASE-CANDIDATE-LIFECYCLE.md` requires RC2 to be cut from the **merged
-readiness state**. PR #2 is currently `BLOCKED` with `reviewDecision:
-REVIEW_REQUIRED`. Branch protection requires one approving review and is
-enforced for administrators.
-
-That protection is deliberately **not** relaxed and the review is **not**
-bypassed. RC2 therefore cannot be frozen yet, and cutting it from an unmerged
-branch would produce a candidate whose history does not match `main`.
-
-## Measurement — our own public-testnet Zebra
-
-Taken from the project's own Zebra full validator, not a hosted RPC:
+The earlier proposal in this document was explicitly provisional. It was
+**re-derived from a fresh measurement** immediately before the freeze, not
+carried over.
 
 | field | value |
 |---|---|
-| decision timestamp | **2026-09-12T09:30:43Z** |
-| canonical tip height | **4,340,527** |
-| canonical tip hash | `0025c70611945e5cbf4314a02374dcbb8fab61c39dc0509ce91181e8a72ea4d7` |
+| decision timestamp | **2026-09-12T11:26:32Z** |
+| canonical tip height | **4,340,637** |
+| canonical tip hash | `000071aa4d878924ea16a1d2bbf9d3352d982092378805b9ed37727ef5cd56d6` |
 | chain | `test` |
-| node | own Zebra v6.3.0 (the trust anchor; no hosted RPC is a dependency) |
+| source | our own Zebra v6.3.0 full validator (no hosted RPC is a dependency) |
+| **chosen `H_testnet`** | **4,346,500** |
+| lead | **5,863 blocks** (~5.1 days at 75 s/block) |
+| floor check (`>= 2000`) | satisfied |
+| preferred band (5,000–6,000) | satisfied |
+| strictly above the tip | satisfied |
 
-## Proposed activation height
+The re-derived value coincides with the earlier provisional number because the
+tip had advanced only ~110 blocks in the interim; it was recomputed from the
+fresh tip, not copied.
 
-| field | value |
+## Manifest consequence
+
+| | |
 |---|---|
-| minimum permitted (`tip + 2000`) | 4,342,527 |
-| **proposed `H_testnet`** | **4,346,500** |
-| lead from the measured tip | **5,973 blocks** (~5.2 days at 75 s/block) |
+| manifest hash before (RC1) | `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752` |
+| **manifest hash after (RC2)** | **`06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb`** |
+| `Cargo.lock` | **byte-identical** — `a8e87a4c852a876390e583e1914931aa396b32b3865ceb336bdcd998aa376199` |
+| `MAINNET_ACTIVATION_HEIGHT` | **`None`** — unchanged |
 
-The proposal deliberately exceeds the 2,000-block floor. The floor is ~2.8
-days, and the freeze cannot begin until a human reviews PR #2. A height chosen
-tightly against today's tip could silently become unsafe while waiting.
+A new manifest hash means a new candidate identity. That is the manifest doing
+its job. RC1 stays immutable and is superseded, not replaced in place.
+
+A test now binds the code constants to the manifest values
+(`activation_heights_match_the_manifest`), so the two cannot drift apart in a
+future change.
+
+## Historical note — why this record previously said RC2 did not exist
+
+`audit/RELEASE-CANDIDATE-LIFECYCLE.md` requires RC2 to be cut from the merged
+readiness state. That condition is now met: PR #2 merged as
+`9565eba0f450b7fb72726651a1e3416a08f0d2d0`, and this candidate is cut from that
+`main`.
+
+**Governance fact, recorded deliberately:** PR #2 merged with **zero submitted
+reviews**. The repository's required approving review count was changed from 1
+to 0 by the owner, and the owner then merged it. No independent human review of
+this work has taken place. This is recorded here because an auditor reading the
+candidate's provenance is entitled to know it; it must not be presented as
+"reviewed".
 
 ## Mandatory re-derivation rule
 

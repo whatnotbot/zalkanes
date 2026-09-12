@@ -7,7 +7,7 @@ Single entry point for an external security/consensus auditor.
 | item | value |
 |---|---|
 | **Git commit** | see `CANDIDATE.txt` (written at freeze; verify with `git rev-parse HEAD`) |
-| **Protocol manifest hash** | `57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752` (SHA-256 of `protocol/v0.toml`) |
+| **Protocol manifest hash** | `06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb` (SHA-256 of `protocol/v0.toml`) |
 | **Protocol status** | v0, `FROZEN-RC` |
 | **Mainnet activation** | `MAINNET_ACTIVATION_HEIGHT = None` — contract execution is disabled on mainnet by construction |
 | **Testnet activation** | height 4,338,100 |

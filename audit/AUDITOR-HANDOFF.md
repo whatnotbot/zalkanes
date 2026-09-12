@@ -11,7 +11,7 @@ Everything below is scoped to EXACTLY one immutable commit.
 | tag object | `48f0b7edb4b0fe5af1d4e4d3a91bbe496adf2dc7` (annotated, **unsigned**) |
 | **commit** | **`79942f5068d91c96529f9b0c6f01bf530e4ee62d`** |
 | tree | `df1dfdc43a6524d94c7ea8e35846fd78c436d7f4` |
-| **protocol manifest hash** | **`57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752`** |
+| **protocol manifest hash** | **`06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb`** |
 | `Cargo.lock` sha256 | `a8e87a4c852a876390e583e1914931aa396b32b3865ceb336bdcd998aa376199` |
 | `MAINNET_ACTIVATION_HEIGHT` | `None` |
 | testnet activation | `4_338_100` (see caveat below) |
