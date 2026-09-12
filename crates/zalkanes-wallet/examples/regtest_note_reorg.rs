@@ -428,6 +428,7 @@ fn case_b() -> Result<()> {
     let mut plan = funding.plan(&TxRequest::Call { op_return }, &ctx)?;
     println!("{}", plan.describe());
     let expiry = plan.expiry_height();
+    let plan_id = plan.plan_id().to_string();
     plan.prove(&h.cs)?;
     plan.sign(&h.cs)?;
     let verified = plan.extract_verified(&h.cs)?;
@@ -479,7 +480,31 @@ fn case_b() -> Result<()> {
 
     h.wallet.scan_to_tip(&h.cs)?;
     let rolled_back = snapshot(&h.wallet, &h.cs)?;
-    print_snapshot("AFTER REORG", &rolled_back);
+    print_snapshot("AFTER REORG (reservation still held)", &rolled_back);
+
+    // The branch-A change note must be gone: it only ever existed on the
+    // branch that was removed.
+    if !rolled_back.notes.ends_with("ironwood_notes=0") {
+        bail!(
+            "the branch-A change note survived the reorg: {}",
+            rolled_back.notes
+        );
+    }
+
+    // The original note is unspent in canonical history but still RESERVED by
+    // this wallet's own note lock — correct while a broadcast might still land.
+    // Now that the canonical tip has passed the spend's expiry the transaction
+    // is permanently dead, which is exactly the case production reconciliation
+    // resolves by releasing the reservation.
+    let conf_final = h.a.tx_confirmations(&spend_txid)?;
+    if conf_final.unwrap_or(0) >= 1 {
+        bail!("the spend is still mined after the reorg (confirmations {conf_final:?})");
+    }
+    println!("releasing the reservation for the dead plan {plan_id}");
+    ShieldedWallet::release(&*h.wallet, &plan_id)?;
+    h.wallet.scan_to_tip(&h.cs)?;
+    let rolled_back = snapshot(&h.wallet, &h.cs)?;
+    print_snapshot("AFTER REORG (reservation released)", &rolled_back);
 
     if rolled_back.balance != funded.balance {
         bail!(
