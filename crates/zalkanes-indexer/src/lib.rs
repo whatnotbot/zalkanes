@@ -33,6 +33,17 @@ pub use parse::{parse_block, ParsedBlock, ParsedTransaction};
 pub struct IndexerConfig {
     pub network: Network,
     pub data_dir: std::path::PathBuf,
+    /// Regtest-only activation height, for boundary testing.
+    ///
+    /// The protocol manifest fixes the activation height of every real network,
+    /// and regtest's manifest value is 1 — which leaves no room below the
+    /// boundary to test with. This field moves the boundary on **regtest only**
+    /// so a short private chain can have genuine pre-activation blocks.
+    ///
+    /// It is ignored on mainnet and testnet by construction, not by convention:
+    /// `activation_height` never consults it for those networks. It does not
+    /// and must not change the protocol manifest.
+    pub regtest_activation_override: Option<BlockHeight>,
 }
 
 impl IndexerConfig {
@@ -42,8 +53,51 @@ impl IndexerConfig {
         match self.network {
             Network::Mainnet => MAINNET_ACTIVATION_HEIGHT,
             Network::Testnet => TESTNET_ACTIVATION_HEIGHT,
-            Network::Regtest => REGTEST_ACTIVATION_HEIGHT,
+            Network::Regtest => self
+                .regtest_activation_override
+                .or(REGTEST_ACTIVATION_HEIGHT),
         }
+    }
+}
+
+#[cfg(test)]
+mod activation_override_tests {
+    use super::*;
+
+    fn cfg(network: Network, override_height: Option<BlockHeight>) -> IndexerConfig {
+        IndexerConfig {
+            network,
+            data_dir: std::path::PathBuf::from("/nonexistent"),
+            regtest_activation_override: override_height,
+        }
+    }
+
+    #[test]
+    fn override_is_ignored_on_mainnet_and_testnet() {
+        // Even a set override must not move a real network's activation.
+        assert_eq!(
+            cfg(Network::Mainnet, Some(7)).activation_height(),
+            MAINNET_ACTIVATION_HEIGHT,
+            "mainnet activation must stay exactly as the manifest fixes it"
+        );
+        assert_eq!(cfg(Network::Mainnet, Some(7)).activation_height(), None);
+        assert_eq!(
+            cfg(Network::Testnet, Some(7)).activation_height(),
+            TESTNET_ACTIVATION_HEIGHT,
+            "testnet activation must stay exactly as the manifest fixes it"
+        );
+    }
+
+    #[test]
+    fn override_applies_only_to_regtest_and_defaults_to_the_manifest() {
+        assert_eq!(
+            cfg(Network::Regtest, None).activation_height(),
+            REGTEST_ACTIVATION_HEIGHT
+        );
+        assert_eq!(
+            cfg(Network::Regtest, Some(130)).activation_height(),
+            Some(130)
+        );
     }
 }
 

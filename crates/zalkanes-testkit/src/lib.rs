@@ -107,6 +107,7 @@ impl TestChain {
         IndexerConfig {
             network: self.network,
             data_dir: std::path::PathBuf::from("/tmp/zalkanes-test"),
+            regtest_activation_override: None,
         }
     }
 
