@@ -427,6 +427,7 @@ fn case_b() -> Result<()> {
     let ctx = FundContext::new(zalkanes_core::types::Network::Regtest, tip);
     let mut plan = funding.plan(&TxRequest::Call { op_return }, &ctx)?;
     println!("{}", plan.describe());
+    let expiry = plan.expiry_height();
     plan.prove(&h.cs)?;
     plan.sign(&h.cs)?;
     let verified = plan.extract_verified(&h.cs)?;
@@ -460,7 +461,19 @@ fn case_b() -> Result<()> {
     }
 
     // ── Reorg onto a branch B that never saw the spend ──────────────────────
-    let (new_tip_h, new_tip) = force_reorg(&h, fork, 4)?;
+    //
+    // Branch B must reach PAST the spend's expiry height. Node A keeps the
+    // reorged-out spend in its mempool, and while it is still valid the wallet
+    // is right to withhold the note — it could legitimately be mined again.
+    // Only once the canonical tip passes `expiry` is the spend permanently
+    // dead and the note unambiguously spendable again. Branch B is mined on
+    // node B, which never saw the spend, so extending it cannot re-include it.
+    let branch_b_len = (expiry as u64).saturating_sub(fork) + 4;
+    println!("spend expiry height {expiry}; branch B will be {branch_b_len} blocks");
+    let (new_tip_h, new_tip) = force_reorg(&h, fork, branch_b_len)?;
+    if new_tip_h <= expiry as u64 {
+        bail!("branch B tip {new_tip_h} did not pass the spend expiry {expiry}");
+    }
     let conf_after = h.a.tx_confirmations(&spend_txid)?;
     println!("spend confirmations after reorg: {conf_after:?}");
 

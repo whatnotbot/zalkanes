@@ -401,6 +401,9 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
         .unwrap_or(3030);
 
     let (network, rpc_url, api_key) = chain_config()?;
+    // Resolved before any network I/O: an override aimed at a real network
+    // must fail immediately, not after connecting to something.
+    let activation_override = regtest_activation_override(network)?;
     let source = Arc::new(build_source(network, &rpc_url, api_key.as_deref())?);
 
     // Open the persistent state database.
@@ -414,7 +417,7 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
     let config = IndexerConfig {
         network,
         data_dir: dir.clone(),
-        regtest_activation_override: regtest_activation_override(network)?,
+        regtest_activation_override: activation_override,
     };
 
     // Validate upstream connection + fetch initial tip, retrying with backoff
