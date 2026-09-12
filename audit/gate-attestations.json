@@ -7,11 +7,19 @@
     "Set `evidence` to null and `satisfied` to false for anything not yet done."
   ],
   "candidate": {
-    "tag": "audit-candidate-v0-rc1",
-    "commit": "79942f5068d91c96529f9b0c6f01bf530e4ee62d",
-    "tag_object": "48f0b7edb4b0fe5af1d4e4d3a91bbe496adf2dc7",
+    "tag": "audit-candidate-v0-rc2",
+    "commit": "ed15911d3ac39a645fd9dc064f85ce879cb729f2",
+    "tag_object": "0faf702e4c3aecf4db02668d2f24d5f3bbef8c0a",
+    "tree": "86daa9d41b317d585c763c4aad05c9cece85414c",
     "cargo_lock_sha256": "a8e87a4c852a876390e583e1914931aa396b32b3865ceb336bdcd998aa376199",
-    "protocol_manifest_sha256": "57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752"
+    "protocol_manifest_sha256": "06e3df62e5e98a3c276b583e038cbea8d05934e9d2a8e7c00299fec3140bf4bb",
+    "superseded": {
+      "tag": "audit-candidate-v0-rc1",
+      "commit": "79942f5068d91c96529f9b0c6f01bf530e4ee62d",
+      "tag_object": "48f0b7edb4b0fe5af1d4e4d3a91bbe496adf2dc7",
+      "protocol_manifest_sha256": "57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752",
+      "_note": "Immutable and untouched. Superseded, not replaced."
+    }
   },
   "gates": {
     "live_note_level_reorg": {
