@@ -193,3 +193,125 @@ jobs:
         run: |
           kill "$(cat /tmp/zebrad-A.pid)" 2>/dev/null || true
           kill "$(cat /tmp/zebrad-B.pid)" 2>/dev/null || true
+
+  note-reorg:
+    name: live note-level wallet reorg
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      ZEBRAD_RELEASE: 6.3.0
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: build the harness (release — shielded proving)
+        run: cargo build --release -p zalkanes-wallet --features shielded --example regtest_note_reorg
+
+      - name: fetch pinned zebrad release (verified checksum)
+        run: |
+          set -euo pipefail
+          BASE="https://github.com/ZcashFoundation/zebra/releases/download/v${ZEBRAD_RELEASE}"
+          FILE="zebrad-${ZEBRAD_RELEASE}-x86_64-unknown-linux-gnu.tar.gz"
+          curl -sSLO "$BASE/$FILE"
+          curl -sSLO "$BASE/$FILE.sha256"
+          sha256sum -c "$FILE.sha256"
+          tar xzf "$FILE"
+          find . -name zebrad -type f -exec cp {} /usr/local/bin/zebrad \;
+          chmod +x /usr/local/bin/zebrad
+          zebrad --version
+
+      - name: install the node control script
+        run: |
+          set -euo pipefail
+          cat > /tmp/nodes.sh <<'SH'
+          start_node () {
+            NAME="$1"; RPC="$2"; P2P="$3"
+            rm -rf "/tmp/zebra-$NAME"; mkdir -p "/tmp/zebra-$NAME"
+            cat > "/tmp/zebra-$NAME/zebrad.toml" <<ZCFG
+          [network]
+          network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
+          listen_addr = "127.0.0.1:$P2P"
+          initial_mainnet_peers = []
+          initial_testnet_peers = []
+          cache_dir = "/tmp/zebra-$NAME/net"
+
+          [state]
+          cache_dir = "/tmp/zebra-$NAME/state"
+          ephemeral = true
+
+          [sync]
+          checkpoint_verify_concurrency_limit = 2
+          download_concurrency_limit = 2
+
+          [consensus]
+          checkpoint_sync = false
+
+          [rpc]
+          listen_addr = "127.0.0.1:$RPC"
+          enable_cookie_auth = false
+
+          [mining]
+          internal_miner = false
+          miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
+          ZCFG
+            zebrad -c "/tmp/zebra-$NAME/zebrad.toml" start > "/tmp/zebrad-$NAME.log" 2>&1 &
+            echo $! > "/tmp/zebrad-$NAME.pid"
+          }
+          wait_rpc () {
+            for i in $(seq 1 90); do
+              if curl -s -m 2 -X POST "http://127.0.0.1:$1" -H 'Content-Type: application/json' \
+                   -d '{"jsonrpc":"1.0","id":"ci","method":"getblockchaininfo","params":[]}' \
+                   | grep -q '"chain"'; then echo "RPC $1 up after ${i}s"; return 0; fi
+              sleep 1
+            done
+            echo "::error::RPC $1 never came up"; return 1
+          }
+          stop_nodes () {
+            kill "$(cat /tmp/zebrad-A.pid 2>/dev/null)" 2>/dev/null || true
+            kill "$(cat /tmp/zebrad-B.pid 2>/dev/null)" 2>/dev/null || true
+            sleep 2
+          }
+          fresh_pair () {
+            stop_nodes
+            start_node A 18232 18233
+            start_node B 18242 18243
+            wait_rpc 18232 || { tail -60 /tmp/zebrad-A.log; return 1; }
+            wait_rpc 18242 || { tail -60 /tmp/zebrad-B.log; return 1; }
+          }
+          SH
+          echo installed
+
+      - name: CASE A — a received note disappears with its branch
+        run: |
+          set -euo pipefail
+          source /tmp/nodes.sh
+          fresh_pair
+          rm -rf /tmp/wallet-case-a
+          ZALKANES_WALLET_DIR=/tmp/wallet-case-a \
+            ./target/release/examples/regtest_note_reorg case-a 2>&1 | tee /tmp/case-a.log
+          grep -q "CASE A PASS" /tmp/case-a.log
+
+      - name: CASE B — a spend rolls back and the note returns
+        run: |
+          set -euo pipefail
+          source /tmp/nodes.sh
+          fresh_pair
+          rm -rf /tmp/wallet-case-b
+          ZALKANES_WALLET_DIR=/tmp/wallet-case-b \
+            ./target/release/examples/regtest_note_reorg case-b 2>&1 | tee /tmp/case-b.log
+          grep -q "CASE B PASS" /tmp/case-b.log
+
+      - name: node logs
+        if: always()
+        run: |
+          echo "── node A ──"; tail -60 /tmp/zebrad-A.log || true
+          echo "── node B ──"; tail -60 /tmp/zebrad-B.log || true
+
+      - name: stop nodes
+        if: always()
+        run: |
+          kill "$(cat /tmp/zebrad-A.pid)" 2>/dev/null || true
+          kill "$(cat /tmp/zebrad-B.pid)" 2>/dev/null || true
