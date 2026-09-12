@@ -1,0 +1,78 @@
+{
+  "_comment": [
+    "Evidence-backed mainnet gates. `satisfied` may ONLY be set true when the",
+    "named evidence file exists AND its sha256 equals `evidence_sha256`.",
+    "scripts/mainnet-gate.sh recomputes every digest, so flipping a flag",
+    "without producing real evidence fails the gate.",
+    "Set `evidence` to null and `satisfied` to false for anything not yet done."
+  ],
+  "candidate": {
+    "tag": "audit-candidate-v0-rc1",
+    "commit": "79942f5068d91c96529f9b0c6f01bf530e4ee62d",
+    "tag_object": "48f0b7edb4b0fe5af1d4e4d3a91bbe496adf2dc7",
+    "cargo_lock_sha256": "a8e87a4c852a876390e583e1914931aa396b32b3865ceb336bdcd998aa376199",
+    "protocol_manifest_sha256": "57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752"
+  },
+  "gates": {
+    "live_note_level_reorg": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Requires the real competing-branch regtest harness, not the deterministic matrix."
+    },
+    "activation_boundary_reorg": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Live reorg across the Zalkanes activation height on regtest."
+    },
+    "fresh_frozen_rc_testnet_activation": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "The existing public-testnet history predates the protocol freeze; see TESTNET-ACTIVATION-AUDIT.md. Requires owner approval to execute."
+    },
+    "external_security_audit_complete": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "No external audit has been commissioned."
+    },
+    "zero_unresolved_critical": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Cannot be true before an audit exists to produce findings."
+    },
+    "zero_unresolved_high": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Cannot be true before an audit exists to produce findings."
+    },
+    "fixes_produced_new_immutable_rc": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Vacuous until audit fixes exist; must name the new RC tag and commit."
+    },
+    "two_node_public_testnet_root_equality": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Must be re-established against the FRESH frozen-RC activation, not the pre-freeze history."
+    },
+    "activation_runbook_reviewed": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "audit/MAINNET-ACTIVATION-RUNBOOK.md must be reviewed and signed off by the owner."
+    },
+    "mainnet_canary_owner_approved": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "note": "Explicit owner approval required. Never inferred."
+    }
+  }
+}
