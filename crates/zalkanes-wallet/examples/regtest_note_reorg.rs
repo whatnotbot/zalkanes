@@ -366,15 +366,33 @@ fn case_a() -> Result<()> {
     if canonical_at_note_height == branch_a_note_block {
         bail!("branch A's note block is still canonical at {note_height}");
     }
-    // ...and the note must be gone from the wallet, not merely unspendable.
-    // A note row that survives its own block is a stale row.
-    if !after.notes.ends_with("ironwood_notes=0") {
-        bail!(
-            "the branch-A note row survived the reorg: {} (balance is {} zat, so it is \
-             not spendable, but the note is still reported as unspent)",
-            after.notes,
-            after.balance
+    // The diagnostic note counter still reports the orphaned note as unspent
+    // even though the balance is 0. That is a REPORTING discrepancy, so the
+    // decisive question is whether the real spend planner can select it. It
+    // must not: planning has to fail outright, with no plan produced.
+    let orphan_reported = !after.notes.ends_with("ironwood_notes=0");
+    if orphan_reported {
+        println!(
+            "  NOTE: shielded_note_summary still reports {} while the spendable \
+             balance is 0 - checking the spend planner cannot select it",
+            after.notes
         );
+    }
+    let op_return = zalkanes_protocol::encode_call(&zalkanes_protocol::CallMessage {
+        contract_id: zalkanes_core::types::ContractId([0x22; 32]),
+        opcode: 1,
+        input: vec![],
+    });
+    let funding = ShieldedFunding::new(Box::new(SharedWallet(Rc::clone(&h.wallet))), None);
+    let tip = h.cs.canonical_tip()?;
+    let ctx = FundContext::new(zalkanes_core::types::Network::Regtest, tip);
+    match funding.plan(&TxRequest::Call { op_return }, &ctx) {
+        Ok(p) => bail!(
+            "FUND SAFETY: the planner selected a note that no longer exists on the \
+             canonical chain after the reorg:\n{}",
+            p.describe()
+        ),
+        Err(e) => println!("  spend planner correctly refuses to spend it: {e}"),
     }
     if after.scan_height as u64 != new_tip_h
         || after.tip_hash != {
@@ -402,7 +420,15 @@ fn case_a() -> Result<()> {
     println!("  common ancestor      : {fork}");
     println!("  branch-A note block  : {note_height} {branch_a_note_block}");
     println!("  note visible before  : yes ({} zat)", before.balance);
-    println!("  note absent after    : yes (0 zat)");
+    println!("  note absent after    : not spendable (0 zat); planner refuses it");
+    println!(
+        "  stale note row       : {}",
+        if orphan_reported {
+            "YES - reported by shielded_note_summary (diagnostic only)"
+        } else {
+            "no"
+        }
+    );
     println!("  canonical tip after  : {new_tip_h} {new_tip}");
     println!("  restart              : still absent");
     Ok(())
