@@ -60,10 +60,19 @@ No gate is ever asserted from reasoning, expectation, or a passing unit test.
 
 ## Status today
 
-Five mechanical gates pass: the mainnet activation height is `None` in both the
-manifest and the source, the protocol manifest digest and `Cargo.lock` digest
-match the frozen values, the candidate tag still resolves to the recorded
-commit, and all five required CI contexts are green on `79942f50…`.
+Eight gates pass. Six are mechanical: the mainnet activation height is `None`
+in both the manifest and the source, the protocol manifest digest and
+`Cargo.lock` digest match the frozen values, the candidate tag still resolves to
+the recorded commit, the working tree is clean, and all five required CI
+contexts are green on `79942f50…`.
+
+Two are evidence-backed and newly closed, both proven against real software
+rather than a deterministic matrix (`audit/LIVE-REORG-EVIDENCE.md`, CI run
+34682825442): **live note-level reorg** and **activation-boundary live reorg**.
+The note-level evidence carries one OPEN observation — a note row survives a
+reorg that removes its block. The spendable balance is 0 and the production
+spend planner refuses it (CI asserts that refusal), but the diagnostic counter
+still reports it and no root cause has been established.
 
 Everything else is blocked. Three blocks are worth calling out because they are
 not merely "not done yet":
