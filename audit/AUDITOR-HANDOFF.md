@@ -110,41 +110,75 @@ hash), and **14 CycloneDX SBOMs** (`*.cdx.json`, one per workspace crate).
   byte equality, and a shielded-funded PREPARE → transparent carrier DEPLOY
   producing a fresh contract executed 0→1→2.
 
-## Priority areas for review
+## Audit scope
 
-1. consensus parser / carrier parsing
-2. WASM determinism and fuel metering
-3. state-root construction
-4. rollback / undo-journal correctness
-5. database atomicity
-6. transaction construction
-7. `VerifiedPczt` / `VerifiedTransaction` type-state boundaries
-8. fee and value-balance verification
-9. shielded change / spend / nullifier / anchor binding
-10. journal and note-lock recovery
-11. `BroadcastUnknown` handling
-12. wallet key custody
-13. reorg handling
-14. activation-boundary semantics
+The engagement must cover all of the following. Items marked **new** were
+added after the live competing-branch reorg work.
 
-## OPEN HARD GATES — please read before concluding
+1. consensus parser and carrier reconstruction
+2. protocol wire canonicality
+3. ContractId derivation
+4. WASM validation and determinism
+5. wasmi fuel schedule and metering
+6. state-root construction
+7. block / transaction / message ordering
+8. rollback and undo-journal correctness
+9. RocksDB atomicity and crash behaviour
+10. full-block wallet scanner
+11. `WalletDb` reorg behaviour
+12. **new** — orphaned-note retention and query semantics (see below)
+13. `CanonicalChainSource` freshness boundary
+14. `VerifiedPczt` / `VerifiedTransaction` type-state
+15. fee and value balance
+16. shielded spends and change
+17. note reservations and `BroadcastUnknown`
+18. custody, unlock, restart
+19. CLI money-moving confirmation boundaries
+20. activation semantics
+21. release-candidate identity (see `RELEASE-CANDIDATE-LIFECYCLE.md`)
+22. reproducible builds and supply-chain controls
 
-1. **Live note-level competing-branch reorg is OPEN.** A shielded note
-   received on a removed branch disappearing, and a spend rolling back, have
-   **not** been observed against a live node. Inducing this requires
-   constructing and submitting a competing chain; that machinery does not
-   exist in this repository. The deterministic wallet reorg matrix is
-   supporting evidence, **not a substitute**. See `REGTEST-CLASSIFICATION.md`.
-2. **Activation-boundary live reorg is OPEN** (rollback below the
-   pre-activation fast-forward point).
-3. **Fresh post-freeze frozen-RC public-testnet activation is OPEN.** The
-   existing testnet activation height predates the final protocol freeze, so
-   the current live evidence is **frozen-CODE acceptance**, NOT a fresh
-   frozen-RC activation. See `TESTNET-ACTIVATION-AUDIT.md`.
-4. **External security audit is OPEN** — this document is its starting point.
+### Note on item 12
 
-Any Critical or High finding is a hard blocker. Fixes produce
-`audit-candidate-v0-rc2` at a new commit; **rc1 is never rewritten.**
+`truncate_to_height` in `zcash_client_sqlite 0.22.0` **un-mines** reorged-out
+transactions rather than deleting them, so received-note rows survive a reorg
+with no mined height. We investigated this to root cause and concluded it is
+intentional upstream retention, with no money path affected; the diagnostic API
+was split into `canonical_note_summary()` and `retained_note_rows()` so the two
+can never be confused. The reasoning and the live A→B→A proof are in
+`LIVE-REORG-EVIDENCE.md`. **Please review that conclusion independently** — it
+is the kind of finding where our own analysis is the thing most worth checking.
+
+## Status of the hard gates
+
+1. **Live note-level competing-branch reorg — CLOSED.** Two real pinned
+   zebrad v6.3.0 nodes, a real shielded coinbase note, a real spend, and Zebra's
+   own best-work reorg. CASE A (note disappears), CASE B (spend rolls back),
+   CASE C (A→B→A, the note returns and is spendable again). See
+   `LIVE-REORG-EVIDENCE.md`.
+2. **Activation-boundary live reorg — CLOSED.** Fork below the activation
+   height; persisted root == restart root == clean-reindex root.
+3. **Fresh post-freeze frozen-RC public-testnet activation — OPEN.** The
+   existing testnet activation height predates the final protocol freeze, so the
+   current live evidence is **frozen-CODE acceptance**, NOT a fresh frozen-RC
+   activation. See `TESTNET-ACTIVATION-AUDIT.md` and `RC2-DECISION-RECORD.md`.
+4. **External security audit — OPEN.** This document is its starting point.
+
+Any Critical or High finding is a hard blocker. Fixes produce a NEW candidate
+at a new commit; **rc1 is never rewritten.**
+
+### Which candidate this document describes
+
+Today it describes **RC1** (`79942f50…`, manifest `57178628…`). The intended
+audit target is **RC2**, which does not exist yet: it requires the readiness
+work to be merged and a fresh testnet activation height, which changes the
+manifest hash and therefore the candidate identity. This document must be
+re-pointed at RC2's exact tag, commit, tree, manifest hash and CI runs before
+the engagement begins.
+
+Because `protocol/v0.toml` carries the mainnet activation constant too, an
+audit of RC2 does **not** transfer to the final mainnet candidate. See
+`RELEASE-CANDIDATE-LIFECYCLE.md`.
 
 ## Mainnet status
 
