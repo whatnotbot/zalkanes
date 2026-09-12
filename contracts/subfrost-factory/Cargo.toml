@@ -1,0 +1,21 @@
+[package]
+name = "subfrost-factory"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+zalkanes-dex-core = { path = "../../crates/zalkanes-dex-core" }
+zalkanes-dex-wasm = { path = "../../crates/zalkanes-dex-wasm" }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

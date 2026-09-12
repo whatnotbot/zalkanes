@@ -3873,6 +3873,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
+name = "subfrost-factory"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+ "zalkanes-dex-wasm",
+]
+
+[[package]]
+name = "subfrost-pool"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+ "zalkanes-dex-wasm",
+]
+
+[[package]]
 name = "subtle"
 version = "2.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3937,6 +3953,14 @@ dependencies = [
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "test-token"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+ "zalkanes-dex-wasm",
 ]
 
 [[package]]
@@ -5010,6 +5034,55 @@ dependencies = [
  "sha2 0.10.8",
  "thiserror 1.0.64",
  "zcash_protocol",
+]
+
+[[package]]
+name = "zalkanes-dex-cli"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "zalkanes-core",
+ "zalkanes-dex-core",
+ "zalkanes-dex-sdk",
+ "zalkanes-dex-testkit",
+]
+
+[[package]]
+name = "zalkanes-dex-core"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-core",
+]
+
+[[package]]
+name = "zalkanes-dex-sdk"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-core",
+ "zalkanes-dex-core",
+]
+
+[[package]]
+name = "zalkanes-dex-testkit"
+version = "0.1.0"
+dependencies = [
+ "blake2b_simd",
+ "hex",
+ "subfrost-factory",
+ "subfrost-pool",
+ "test-token",
+ "zalkanes-core",
+ "zalkanes-dex-core",
+ "zalkanes-dex-sdk",
+ "zalkanes-runtime",
+ "zalkanes-testkit",
+]
+
+[[package]]
+name = "zalkanes-dex-wasm"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
 ]
 
 [[package]]

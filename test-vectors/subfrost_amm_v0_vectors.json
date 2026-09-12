@@ -1,0 +1,894 @@
+{
+ "constants": {
+  "FEE_DENOMINATOR_BPS": 10000,
+  "LP_FEE_BPS": 80,
+  "MINIMUM_LIQUIDITY": 1000,
+  "PROTOCOL_FEE_BPS": 20,
+  "TOTAL_SWAP_FEE_BPS": 100
+ },
+ "generator": "tools/gen_subfrost_vectors.py (python bigint reference)",
+ "schema": "subfrost-amm-v0-vectors",
+ "vectors": [
+  {
+   "args": {
+    "amount0": 1000000,
+    "amount1": 1000000
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 999000,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "id": "INIT-001",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 1002,
+    "amount1": 1001
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 1,
+    "reserve0": 1002,
+    "reserve1": 1001,
+    "total_lp_supply": 1001
+   },
+   "id": "INIT-002",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 5000000,
+    "amount1": 20000000
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 9999000,
+    "reserve0": 5000000,
+    "reserve1": 20000000,
+    "total_lp_supply": 10000000
+   },
+   "id": "INIT-003",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 1,
+    "amount1": 10000000000000
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 3161277,
+    "reserve0": 1,
+    "reserve1": 10000000000000,
+    "total_lp_supply": 3162277
+   },
+   "id": "INIT-004",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 123456789,
+    "amount1": 987654321
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 349187532,
+    "reserve0": 123456789,
+    "reserve1": 987654321,
+    "total_lp_supply": 349188532
+   },
+   "id": "INIT-005",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 1000000000000000000,
+    "amount1": 1000000000000000000
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 999999999999999000,
+    "reserve0": 1000000000000000000,
+    "reserve1": 1000000000000000000,
+    "total_lp_supply": 1000000000000000000
+   },
+   "id": "INIT-006",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 1267650600228229401496703205376,
+    "amount1": 1267650600228229401496703205376
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 1267650600228229401496703204376,
+    "reserve0": 1267650600228229401496703205376,
+    "reserve1": 1267650600228229401496703205376,
+    "total_lp_supply": 1267650600228229401496703205376
+   },
+   "id": "INIT-007",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 18446744073709551615,
+    "amount1": 18446744073709551617
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 18446744073709550615,
+    "reserve0": 18446744073709551615,
+    "reserve1": 18446744073709551617,
+    "total_lp_supply": 18446744073709551615
+   },
+   "id": "INIT-008",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 3,
+    "amount1": 400000007
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 33641,
+    "reserve0": 3,
+    "reserve1": 400000007,
+    "total_lp_supply": 34641
+   },
+   "id": "INIT-009",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 999983,
+    "amount1": 2750161
+   },
+   "expected": {
+    "locked_lp": 1000,
+    "provider_lp": 1657346,
+    "reserve0": 999983,
+    "reserve1": 2750161,
+    "total_lp_supply": 1658346
+   },
+   "id": "INIT-010",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "desired0": 500000,
+    "desired1": 500000,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "accepted0": 500000,
+    "accepted1": 500000,
+    "lp_minted": 500000,
+    "refund0": 0,
+    "refund1": 0,
+    "reserve0": 1500000,
+    "reserve1": 1500000,
+    "total_lp_supply": 1500000
+   },
+   "id": "ADD-001",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 500000,
+    "desired1": 700000,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "accepted0": 500000,
+    "accepted1": 500000,
+    "lp_minted": 500000,
+    "refund0": 0,
+    "refund1": 200000,
+    "reserve0": 1500000,
+    "reserve1": 1500000,
+    "total_lp_supply": 1500000
+   },
+   "id": "ADD-002",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 700000,
+    "desired1": 500000,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "accepted0": 500000,
+    "accepted1": 500000,
+    "lp_minted": 500000,
+    "refund0": 200000,
+    "refund1": 0,
+    "reserve0": 1500000,
+    "reserve1": 1500000,
+    "total_lp_supply": 1500000
+   },
+   "id": "ADD-003",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 100000,
+    "desired1": 400001,
+    "reserve0": 1000000,
+    "reserve1": 4000000,
+    "total_lp_supply": 2000000
+   },
+   "expected": {
+    "accepted0": 100000,
+    "accepted1": 400000,
+    "lp_minted": 200000,
+    "refund0": 0,
+    "refund1": 1,
+    "reserve0": 1100000,
+    "reserve1": 4400000,
+    "total_lp_supply": 2200000
+   },
+   "id": "ADD-004",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 3,
+    "desired1": 5,
+    "reserve0": 7,
+    "reserve1": 13,
+    "total_lp_supply": 1009
+   },
+   "expected": {
+    "accepted0": 3,
+    "accepted1": 5,
+    "lp_minted": 388,
+    "refund0": 0,
+    "refund1": 0,
+    "reserve0": 10,
+    "reserve1": 18,
+    "total_lp_supply": 1397
+   },
+   "id": "ADD-005",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 1000000000000,
+    "desired1": 1000000000000,
+    "reserve0": 1000000000000000000,
+    "reserve1": 3000000000000000000,
+    "total_lp_supply": 1000000000000000000
+   },
+   "expected": {
+    "accepted0": 333333333333,
+    "accepted1": 1000000000000,
+    "lp_minted": 333333333333,
+    "refund0": 666666666667,
+    "refund1": 0,
+    "reserve0": 1000000333333333333,
+    "reserve1": 3000001000000000000,
+    "total_lp_supply": 1000000333333333333
+   },
+   "id": "ADD-006",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 123457,
+    "desired1": 339559,
+    "reserve0": 999983,
+    "reserve1": 2750161,
+    "total_lp_supply": 1657349
+   },
+   "expected": {
+    "accepted0": 123457,
+    "accepted1": 339532,
+    "lp_minted": 204614,
+    "refund0": 0,
+    "refund1": 27,
+    "reserve0": 1123440,
+    "reserve1": 3089693,
+    "total_lp_supply": 1861963
+   },
+   "id": "ADD-007",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 1208925819614629174706176,
+    "desired1": 1208925819614629174718521,
+    "reserve0": 1237940039285380274899124224,
+    "reserve1": 1237940039285380274899124224,
+    "total_lp_supply": 1237940039285380274899124224
+   },
+   "expected": {
+    "accepted0": 1208925819614629174706176,
+    "accepted1": 1208925819614629174706176,
+    "lp_minted": 1208925819614629174706176,
+    "refund0": 0,
+    "refund1": 12345,
+    "reserve0": 1239148965104994904073830400,
+    "reserve1": 1239148965104994904073830400,
+    "total_lp_supply": 1239148965104994904073830400
+   },
+   "id": "ADD-008",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 1,
+    "desired1": 1,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "accepted0": 1,
+    "accepted1": 1,
+    "lp_minted": 1,
+    "refund0": 0,
+    "refund1": 0,
+    "reserve0": 1000001,
+    "reserve1": 1000001,
+    "total_lp_supply": 1000001
+   },
+   "id": "ADD-009",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 4999,
+    "desired1": 5001,
+    "reserve0": 5000,
+    "reserve1": 5000,
+    "total_lp_supply": 5000
+   },
+   "expected": {
+    "accepted0": 4999,
+    "accepted1": 4999,
+    "lp_minted": 4999,
+    "refund0": 0,
+    "refund1": 2,
+    "reserve0": 9999,
+    "reserve1": 9999,
+    "total_lp_supply": 9999
+   },
+   "id": "ADD-010",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 500000,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "amount0": 500000,
+    "amount1": 500000,
+    "reserve0": 500000,
+    "reserve1": 500000,
+    "total_lp_supply": 500000
+   },
+   "id": "REM-001",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 1,
+    "reserve0": 1000000,
+    "reserve1": 1000000,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "amount0": 1,
+    "amount1": 1,
+    "reserve0": 999999,
+    "reserve1": 999999,
+    "total_lp_supply": 999999
+   },
+   "id": "REM-002",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 657349,
+    "reserve0": 999983,
+    "reserve1": 2750161,
+    "total_lp_supply": 1657349
+   },
+   "expected": {
+    "amount0": 396620,
+    "amount1": 1090787,
+    "reserve0": 603363,
+    "reserve1": 1659374,
+    "total_lp_supply": 1000000
+   },
+   "id": "REM-003",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 100000000000000000,
+    "reserve0": 1000000000000000000,
+    "reserve1": 3000000000000000000,
+    "total_lp_supply": 1000000000000000000
+   },
+   "expected": {
+    "amount0": 100000000000000000,
+    "amount1": 300000000000000000,
+    "reserve0": 900000000000000000,
+    "reserve1": 2700000000000000000,
+    "total_lp_supply": 900000000000000000
+   },
+   "id": "REM-004",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 9,
+    "reserve0": 7,
+    "reserve1": 13,
+    "total_lp_supply": 1009
+   },
+   "expected": {
+    "error": "InsufficientLiquidity"
+   },
+   "id": "REM-005",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 633825300114114700748351602688,
+    "reserve0": 1267650600228229401496703205376,
+    "reserve1": 1267650600228229401496703205376,
+    "total_lp_supply": 1267650600228229401496703205376
+   },
+   "expected": {
+    "amount0": 633825300114114700748351602688,
+    "amount1": 633825300114114700748351602688,
+    "reserve0": 633825300114114700748351602688,
+    "reserve1": 633825300114114700748351602688,
+    "total_lp_supply": 633825300114114700748351602688
+   },
+   "id": "REM-006",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 1999000,
+    "reserve0": 1000000,
+    "reserve1": 4000000,
+    "total_lp_supply": 2000000
+   },
+   "expected": {
+    "amount0": 999500,
+    "amount1": 3998000,
+    "reserve0": 500,
+    "reserve1": 2000,
+    "total_lp_supply": 1000
+   },
+   "id": "REM-007",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 4999,
+    "reserve0": 5000,
+    "reserve1": 5000,
+    "total_lp_supply": 5000
+   },
+   "expected": {
+    "amount0": 4999,
+    "amount1": 4999,
+    "reserve0": 1,
+    "reserve1": 1,
+    "total_lp_supply": 1
+   },
+   "id": "REM-008",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 349206089,
+    "reserve0": 123456789,
+    "reserve1": 987654321,
+    "total_lp_supply": 349206090
+   },
+   "expected": {
+    "amount0": 123456788,
+    "amount1": 987654318,
+    "reserve0": 1,
+    "reserve1": 3,
+    "total_lp_supply": 1
+   },
+   "id": "REM-009",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "lp_amount": 333333,
+    "reserve0": 1000001,
+    "reserve1": 999999,
+    "total_lp_supply": 1000000
+   },
+   "expected": {
+    "amount0": 333333,
+    "amount1": 333332,
+    "reserve0": 666668,
+    "reserve1": 666667,
+    "total_lp_supply": 666667
+   },
+   "id": "REM-010",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "amount_in": 10000,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "amount_out": 9802,
+    "lp_fee": 80,
+    "protocol_fee": 20,
+    "protocol_fee_accrued_in": 20,
+    "reserve_in": 1009980,
+    "reserve_out": 990198,
+    "total_fee": 100
+   },
+   "id": "SWAP-001",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 100,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "amount_out": 98,
+    "lp_fee": 0,
+    "protocol_fee": 1,
+    "protocol_fee_accrued_in": 1,
+    "reserve_in": 1000099,
+    "reserve_out": 999902,
+    "total_fee": 1
+   },
+   "id": "SWAP-002",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 99,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "error": "ZeroAmount"
+   },
+   "id": "SWAP-003",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 101,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "amount_out": 99,
+    "lp_fee": 0,
+    "protocol_fee": 1,
+    "protocol_fee_accrued_in": 1,
+    "reserve_in": 1000100,
+    "reserve_out": 999901,
+    "total_fee": 1
+   },
+   "id": "SWAP-004",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 1000000,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "amount_out": 497487,
+    "lp_fee": 8000,
+    "protocol_fee": 2000,
+    "protocol_fee_accrued_in": 2000,
+    "reserve_in": 1998000,
+    "reserve_out": 502513,
+    "total_fee": 10000
+   },
+   "id": "SWAP-005",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 137251,
+    "reserve_in": 2750161,
+    "reserve_out": 999983
+   },
+   "expected": {
+    "amount_out": 47080,
+    "lp_fee": 1098,
+    "protocol_fee": 274,
+    "protocol_fee_accrued_in": 274,
+    "reserve_in": 2887138,
+    "reserve_out": 952903,
+    "total_fee": 1372
+   },
+   "id": "SWAP-006",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 137251,
+    "reserve_in": 999983,
+    "reserve_out": 2750161
+   },
+   "expected": {
+    "amount_out": 328990,
+    "lp_fee": 1098,
+    "protocol_fee": 274,
+    "protocol_fee_accrued_in": 274,
+    "reserve_in": 1136960,
+    "reserve_out": 2421171,
+    "total_fee": 1372
+   },
+   "id": "SWAP-007",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 1000000000000000,
+    "reserve_in": 1000000000000000000,
+    "reserve_out": 1000000000000000000
+   },
+   "expected": {
+    "amount_out": 989020869339354,
+    "lp_fee": 8000000000000,
+    "protocol_fee": 2000000000000,
+    "protocol_fee_accrued_in": 2000000000000,
+    "reserve_in": 1000998000000000000,
+    "reserve_out": 999010979130660646,
+    "total_fee": 10000000000000
+   },
+   "id": "SWAP-008",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 1000000000000000000000000000,
+    "reserve_in": 1000000000000000000000000000000,
+    "reserve_out": 1000000000000000000000000000000
+   },
+   "expected": {
+    "amount_out": 989020869339354039500894114,
+    "lp_fee": 8000000000000000000000000,
+    "protocol_fee": 2000000000000000000000000,
+    "protocol_fee_accrued_in": 2000000000000000000000000,
+    "reserve_in": 1000998000000000000000000000000,
+    "reserve_out": 999010979130660645960499105886,
+    "total_fee": 10000000000000000000000000
+   },
+   "id": "SWAP-009",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 1267650600228229401496703205376,
+    "reserve_in": 1298074214633706907132624082305024,
+    "reserve_out": 1298074214633706907132624082305024
+   },
+   "expected": {
+    "amount_out": 1253761961079981110119413693286,
+    "lp_fee": 10141204801825835211973625643,
+    "protocol_fee": 2535301200456458802993406410,
+    "protocol_fee_accrued_in": 2535301200456458802993406410,
+    "reserve_in": 1299339329932734680075317792103990,
+    "reserve_out": 1296820452672626926022504668611738,
+    "total_fee": 12676506002282294014967032053
+   },
+   "id": "SWAP-010",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 1000000,
+    "reserve_in": 1000000000,
+    "reserve_out": 3
+   },
+   "expected": {
+    "error": "InsufficientLiquidity"
+   },
+   "id": "SWAP-011",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 1000,
+    "reserve_in": 5,
+    "reserve_out": 5000000000
+   },
+   "expected": {
+    "amount_out": 4974874371,
+    "lp_fee": 8,
+    "protocol_fee": 2,
+    "protocol_fee_accrued_in": 2,
+    "reserve_in": 1003,
+    "reserve_out": 25125629,
+    "total_fee": 10
+   },
+   "id": "SWAP-012",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 5000000,
+    "reserve_in": 123456789,
+    "reserve_out": 987654321
+   },
+   "expected": {
+    "amount_out": 38073445,
+    "lp_fee": 40000,
+    "protocol_fee": 10000,
+    "protocol_fee_accrued_in": 10000,
+    "reserve_in": 128446789,
+    "reserve_out": 949580876,
+    "total_fee": 50000
+   },
+   "id": "SWAP-013",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 12345,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "amount_out": 12073,
+    "lp_fee": 98,
+    "protocol_fee": 25,
+    "protocol_fee_accrued_in": 25,
+    "reserve_in": 1012320,
+    "reserve_out": 987927,
+    "total_fee": 123
+   },
+   "id": "SWAP-014",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 999999,
+    "reserve_in": 7777777,
+    "reserve_out": 3333333
+   },
+   "expected": {
+    "amount_out": 376377,
+    "lp_fee": 7999,
+    "protocol_fee": 2000,
+    "protocol_fee_accrued_in": 2000,
+    "reserve_in": 8775776,
+    "reserve_out": 2956956,
+    "total_fee": 9999
+   },
+   "id": "SWAP-015",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount0": 1000,
+    "amount1": 1000
+   },
+   "expected": {
+    "error": "InsufficientInitialLiquidity"
+   },
+   "id": "FAIL-001",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount0": 0,
+    "amount1": 10000
+   },
+   "expected": {
+    "error": "ZeroAmount"
+   },
+   "id": "FAIL-002",
+   "op": "initialize"
+  },
+  {
+   "args": {
+    "amount_in": 0,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "error": "ZeroAmount"
+   },
+   "id": "FAIL-003",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 10000,
+    "reserve_in": 0,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "error": "InsufficientLiquidity"
+   },
+   "id": "FAIL-004",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "amount_in": 50,
+    "reserve_in": 1000000,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "error": "ZeroAmount"
+   },
+   "id": "FAIL-005",
+   "op": "swap_exact_in"
+  },
+  {
+   "args": {
+    "lp_amount": 1001,
+    "reserve0": 1000,
+    "reserve1": 1000,
+    "total_lp_supply": 1000
+   },
+   "expected": {
+    "error": "InsufficientLp"
+   },
+   "id": "FAIL-006",
+   "op": "remove_liquidity"
+  },
+  {
+   "args": {
+    "desired0": 0,
+    "desired1": 10,
+    "reserve0": 1000000000000000000000000000000,
+    "reserve1": 1000000000000000000000000000000,
+    "total_lp_supply": 1000000000000000000000000000000
+   },
+   "expected": {
+    "error": "ZeroAmount"
+   },
+   "id": "FAIL-007",
+   "op": "add_liquidity"
+  },
+  {
+   "args": {
+    "amount_in": 1000000,
+    "reserve_in": 340282366920938463463374607431768211454,
+    "reserve_out": 1000000
+   },
+   "expected": {
+    "error": "ArithmeticOverflow"
+   },
+   "id": "FAIL-008",
+   "op": "swap_exact_in"
+  }
+ ]
+}

@@ -1,0 +1,16 @@
+[package]
+name = "zalkanes-dex-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "zalkanes-dex"
+path = "src/main.rs"
+
+[dependencies]
+zalkanes-core = { path = "../zalkanes-core" }
+zalkanes-dex-core = { path = "../zalkanes-dex-core" }
+zalkanes-dex-sdk = { path = "../zalkanes-dex-sdk" }
+zalkanes-dex-testkit = { path = "../zalkanes-dex-testkit" }
+hex = { workspace = true }

@@ -19,7 +19,9 @@ pub struct CodeHash(pub [u8; 32]);
 
 /// Deterministic contract identifier (BLAKE2b-256).
 /// See ADR 0004 and `docs/protocol-v0.md §8`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// `Ord` is byte-lexicographic (like `TxId`) so the id can key ordered
+/// maps; it has no consensus meaning.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ContractId(pub [u8; 32]);
 
 /// Zalkanes state root (BLAKE2b-256 over sorted state leaves).

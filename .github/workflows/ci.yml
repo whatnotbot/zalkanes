@@ -71,6 +71,14 @@ jobs:
         run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/token/Cargo.toml
       - name: Build caller
         run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/caller/Cargo.toml
+      - name: Build test-token (DEX)
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/test-token/Cargo.toml
+      - name: Build subfrost-pool (DEX)
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/subfrost-pool/Cargo.toml
+      - name: Build subfrost-factory (DEX)
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/subfrost-factory/Cargo.toml
+      - name: Build subfrost-mathcheck (DEX)
+        run: cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/subfrost-mathcheck/Cargo.toml
 
   deny:
     name: cargo deny

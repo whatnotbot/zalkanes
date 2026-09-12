@@ -1,0 +1,25 @@
+[package]
+name = "zalkanes-dex-testkit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Deterministic in-memory runtime implementing the PROPOSED DEX host ABI
+# (zalkanes_dex_core::host::Host) so the AMM contracts can be executed,
+# with atomic calls, block/rollback/restart modeling, deterministic state
+# roots, fuel metering and fault injection. This is test infrastructure —
+# it implements the ABI proposal, it does not modify platform consensus.
+
+[dependencies]
+zalkanes-core = { path = "../zalkanes-core" }
+zalkanes-dex-core = { path = "../zalkanes-dex-core" }
+zalkanes-dex-sdk = { path = "../zalkanes-dex-sdk" }
+blake2b_simd = { workspace = true }
+subfrost-pool = { path = "../../contracts/subfrost-pool" }
+subfrost-factory = { path = "../../contracts/subfrost-factory" }
+test-token = { path = "../../contracts/test-token" }
+
+[dev-dependencies]
+zalkanes-testkit = { path = "../zalkanes-testkit" }
+zalkanes-runtime = { path = "../zalkanes-runtime" }
+hex = { workspace = true }
