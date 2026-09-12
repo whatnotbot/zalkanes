@@ -268,7 +268,8 @@ pub fn wallet_status(network: Network, zebra_url: &str) -> Result<()> {
     println!("address:     {}", wallet.unified_address()?);
     println!("birthday:    {}", wallet.birthday_height()?);
     println!("balance:     {} zat", wallet.balance()?);
-    println!("notes:       {}", wallet.shielded_note_summary()?);
+    println!("notes:       {}", wallet.canonical_note_summary()?);
+    println!("retained:    {}", wallet.retained_note_rows()?);
 
     match ZebraCanonicalChainSource::new(zebra_url.to_string(), wallet_params(network))
         .and_then(|c| c.canonical_tip())
