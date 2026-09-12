@@ -1,0 +1,61 @@
+ZALKANES AUDIT CANDIDATE
+========================
+
+Tag:                  audit-candidate-v0-rc1
+Commit:               the commit this tag points at (`git rev-list -n1 audit-candidate-v0-rc1`)
+Protocol:             v0, FROZEN-RC
+Protocol manifest:    57178628cebadad21da5e5c6495a7d646a55c0299609ea8939737744ab0b8752
+                      (SHA-256 of protocol/v0.toml; verify with `sha256sum protocol/v0.toml`)
+Mainnet activation:   None  (contract execution disabled on mainnet by construction)
+Testnet activation:   4,338,100  (see TESTNET-ACTIVATION-AUDIT.md — NOT a fresh post-freeze activation)
+
+TOOLCHAIN / PINS
+  Rust:               1.88.0  (CI: rustc 1.88.0 (6b00bc388 2025-06-23))
+  Dependencies:       Cargo.lock committed; release builds use --locked
+  WASM engine:        wasmi =2.0.0   (any change is a protocol change)
+  Zcash stack:        zcash_primitives =0.30.1, orchard =0.15.5, pczt =0.9.3,
+                      zcash_client_sqlite =0.22.0
+  State store:        rocksdb 0.22.0
+  Base node:          Zebra 6.3.0
+
+RELEASE ARTIFACTS  (release-engineering run 34664098971, all jobs success)
+  x86_64-unknown-linux-gnu   sha256 8a155abe1967652c55dbfeb20d3996bef45d5847105f2108e29cf4e0427d254f
+  aarch64-unknown-linux-gnu  sha256 12b1977c01e0603fae3795d380e684d575370aad45e0337ae8883a650fcdda77
+  Reproducible:              YES — two independent clean builds byte-identical per target
+  SBOM:                      CycloneDX (*.cdx.json) published with each artifact
+  Checksums/manifest:        SHA256SUMS + MANIFEST.txt per artifact
+  Container digest:          not built for this candidate
+
+CI STATUS AT THE CANDIDATE
+  CI (fmt, clippy -D warnings, tests, shielded tests, cargo-deny):  green
+  arm64-determinism (NATIVE aarch64 Linux, debug + release):        green
+  release-engineering (reproducible builds + real disk-full):       green
+  live-zebra-regtest (real pinned zebrad v6.3.0 baseline):          green
+
+EVIDENCE
+  Fuzzing:            5 targets, 412M+ executions; 2 findings, both fixed
+                      with regression seeds; 0 unresolved        (FUZZING.md)
+  State-root vectors: 101 execution + 100 hashing + 5 protocol    (STATE-ROOT.md)
+  Determinism:        native aarch64-darwin, native x86_64-linux (CI),
+                      native aarch64-linux (CI); x86_64-darwin under Rosetta
+                      (labeled emulation)
+  Two-node equality:  live public-testnet resync byte-identical at height
+                      4,339,534; plus 100 deploys / 10,000 calls / 1,000
+                      failures across isolated stores
+  Crash/corruption:   SIGKILL, interrupted rollback, read-only, truncated
+                      CURRENT, corrupt MANIFEST, REAL disk-full on ext4 loopback
+  Live wallet:        shielded CALLs, payload equality, shielded-funded
+                      deploy                         (LIVE-ACCEPTANCE-EVIDENCE.md)
+
+MAINNET BLOCKERS
+  - External security audit (hard gate)
+  - Fresh frozen-RC public testnet activation + acceptance (needs approval)
+  - Live note-level branch reorg evidence (needs competing-chain machinery)
+  - Activation-boundary reorg test
+  - Any Critical/High audit finding
+
+NOT DONE / NOT CLAIMED
+  - No mainnet activation height is set. No mainnet ZEC has been spent.
+    No mainnet canary has been run.
+  - The public-testnet history is frozen-CODE acceptance, NOT a fresh
+    post-freeze frozen-RC activation.
