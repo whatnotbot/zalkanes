@@ -70,16 +70,33 @@ fn tmp_dir(tag: &str) -> std::path::PathBuf {
 
 // ── Subprocess writer (killed by the parent) ─────────────────────────────────
 
+/// Marker the child creates once it has durably committed a block in this
+/// cycle, so the parent kills a writer that is genuinely mid-stream rather
+/// than one that may still be opening the database.
+fn ready_marker(db_path: &std::path::Path) -> std::path::PathBuf {
+    let mut p = db_path.as_os_str().to_os_string();
+    p.push(".writer-ready");
+    std::path::PathBuf::from(p)
+}
+
 /// Child mode: apply commits forever until SIGKILLed. Activated only via env.
 #[test]
 fn crash_writer_child() {
     let Ok(db_path) = std::env::var("ZALKANES_CRASH_WRITER_DB") else {
         return; // normal test runs skip the child body
     };
-    let mut db = RocksState::open(std::path::Path::new(&db_path)).unwrap();
+    let db_path = std::path::PathBuf::from(db_path);
+    let mut db = RocksState::open(&db_path).unwrap();
     let mut h = db.indexed_height().map(|h| h + 1).unwrap_or(1);
+    let mut announced = false;
     loop {
         db.commit_block(commit_for(h)).unwrap();
+        if !announced {
+            // Only after a commit returned: from here on the store holds at
+            // least one complete block for this cycle.
+            std::fs::write(ready_marker(&db_path), h.to_string()).unwrap();
+            announced = true;
+        }
         h += 1;
         if h > 100_000 {
             return; // unreachable in practice; parent kills first
@@ -88,6 +105,7 @@ fn crash_writer_child() {
 }
 
 fn spawn_writer(db_path: &std::path::Path) -> std::process::Child {
+    let _ = std::fs::remove_file(ready_marker(db_path));
     Command::new(std::env::current_exe().unwrap())
         .args(["crash_writer_child", "--exact", "--nocapture"])
         .env("ZALKANES_CRASH_WRITER_DB", db_path)
@@ -97,6 +115,24 @@ fn spawn_writer(db_path: &std::path::Path) -> std::process::Child {
         .expect("spawn crash writer child")
 }
 
+/// Block until the child reports its first commit of this cycle. Bounded: a
+/// writer that never commits is a real defect, not something to wait out.
+fn await_first_commit(db_path: &std::path::Path, cycle: u64) {
+    let marker = ready_marker(db_path);
+    let start = std::time::Instant::now();
+    while start.elapsed() < std::time::Duration::from_secs(120) {
+        if marker.exists() {
+            println!(
+                "cycle {cycle}: child reached its first commit in {} ms",
+                start.elapsed().as_millis()
+            );
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    panic!("cycle {cycle}: writer child never committed a block within 120s");
+}
+
 #[test]
 fn sigkill_during_commits_recovers_to_clean_replay() {
     let dir = tmp_dir("sigkill");
@@ -104,6 +140,11 @@ fn sigkill_during_commits_recovers_to_clean_replay() {
     // Three kill cycles at arbitrary points, then recovery + continuation.
     for cycle in 0..3 {
         let mut child = spawn_writer(&dir);
+        // Wait for the stream to actually start, THEN let it run for a while
+        // and kill it at an arbitrary point inside the stream. Killing on a
+        // fixed delay alone assumed the child could open RocksDB and commit
+        // within that delay, which is not true on a loaded machine.
+        await_first_commit(&dir, cycle);
         std::thread::sleep(std::time::Duration::from_millis(400 + cycle * 170));
         child.kill().unwrap(); // SIGKILL on unix
         let _ = child.wait();
