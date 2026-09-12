@@ -8,39 +8,77 @@ This tag is **immutable**. If audit findings require changes, a new
 candidate (`audit-candidate-v0-rc2`) is created; rc1 is never moved or
 rewritten, and published history is never rewritten.
 
-## Branch protection — REQUIRED ADMINISTRATIVE STEP (not applied)
+## Branch protection — APPLIED (owner-approved)
 
-`main` is currently **unprotected** (verified: the branch-protection API
-returns 404 "Branch not protected"). Protection changes how everyone pushes
-to this repository, so it is a governance decision for the repository owner
-rather than something to enable unilaterally. It has therefore been
-documented, not applied.
+`main` is protected. Verified settings:
 
-To require green CI before anything reaches `main`:
+| setting | value |
+|---|---|
+| pull request required | yes |
+| required approving reviews | 1 |
+| dismiss stale reviews | yes |
+| required conversation resolution | yes |
+| require branch up to date before merge | yes (`strict`) |
+| required linear history | yes |
+| force pushes | **disabled** |
+| branch deletion | **disabled** |
+| enforced for administrators | yes |
+
+Required status checks (exact context names, queried from the check-runs
+API rather than guessed):
+
+- `fmt + clippy + test`
+- `shielded wallet (clippy + test)`
+- `cargo deny`
+- `native ARM64 Linux (debug + release)`
+- `live zebrad regtest (pinned v6.3.0)`
+
+> Operational note: with `enforce_admins` on and one required approval, the
+> repository owner cannot merge their own pull request unaided. That is the
+> intended governance posture. An administrator can temporarily relax it via
+> the protection API if a solo merge is genuinely required.
+
+## Tag protection — APPLIED
+
+Repository ruleset **`release-and-audit-tags`** (id `23013829`), target
+`tag`, enforcement `active`, **no bypass actors**, covering:
+
+- `refs/tags/audit-candidate-*`
+- `refs/tags/v*`
+
+Rules: `deletion`, `update`, `non_fast_forward` — so protected tags cannot
+be deleted, moved, or force-updated.
+
+Creating the ruleset did not touch any existing ref;
+`audit-candidate-v0-rc1` still resolves to tag object
+`48f0b7edb4b0fe5af1d4e4d3a91bbe496adf2dc7` → commit
+`79942f5068d91c96529f9b0c6f01bf530e4ee62d`.
+
+## Release integrity: rc1 is NOT cryptographically signed
+
+`audit-candidate-v0-rc1` is an annotated but **unsigned** tag. GitHub
+reports:
 
 ```
-gh api -X PUT repos/<owner>/zalkanes/branches/main/protection \
-  -F required_status_checks.strict=true \
-  -f 'required_status_checks.contexts[]=fmt + clippy + test' \
-  -f 'required_status_checks.contexts[]=shielded wallet (clippy + test)' \
-  -f 'required_status_checks.contexts[]=native ARM64 Linux (debug + release)' \
-  -f 'required_status_checks.contexts[]=live zebrad regtest (pinned v6.3.0)' \
-  -F enforce_admins=true \
-  -F required_pull_request_reviews.required_approving_review_count=1 \
-  -F restrictions=null
+verification.verified = false
+verification.reason   = "unsigned"
 ```
 
-Recommended additionally:
+This is recorded rather than corrected: **rc1 is not rewritten to sign it**,
+because re-tagging would destroy the immutability the candidate depends on.
 
-- **Tag protection** for `audit-candidate-*` and `v*` so release tags cannot
-  be moved or deleted.
-- **Require linear history** and disallow force-pushes to `main`.
+Integrity of this candidate therefore rests on:
 
-Until these are applied, the immutability of the audit candidate rests on
-convention plus the recorded commit SHA and artifact digests in
-`CANDIDATE.txt` — an auditor can always verify independently with
-`git rev-list -n1 audit-candidate-v0-rc1` and by re-running the
-reproducible-build workflow at that commit.
+- the immutable tag ruleset above (no delete/move/force-update),
+- the recorded commit SHA and tree SHA,
+- the `Cargo.lock` digest and dependency pins in `CANDIDATE.txt`, and
+- **reproducible builds** — anyone can rebuild at this commit and obtain the
+  published artifact digests byte-for-byte.
+
+**Requirement for the eventual post-audit final release tag:** it MUST be
+cryptographically signed (GPG/SSH, `verification.verified = true`) or carry
+an equivalent GitHub release attestation / build-provenance record. Signing
+is a release-engineering gate for the final tag, not a retrofit for rc1.
 
 ## CI coverage at the candidate
 
