@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
-            -d '{"jsonrpc":"1.0","id":"ci","method":"generate","params":[25]}' | head -c 200
+            -d '{"jsonrpc":"1.0","id":"ci","method":"generate","params":[120]}' | head -c 200
           echo
           curl -s -X POST http://127.0.0.1:18232 -H 'Content-Type: application/json' \
             -d '{"jsonrpc":"1.0","id":"ci","method":"getblockcount","params":[]}'
@@ -137,7 +137,7 @@ jobs:
           # Classifies any scan failure definitively: if these succeed but the
           # scanner fails, the fault is client-side; if these fail, it is the
           # node/environment.
-          for h in 1 2 20; do
+          for h in 1 2 21; do
             echo "getblockhash($h):"
             rpc getblockhash "[$h]" | head -c 120; echo
             echo "z_gettreestate(\"$h\"):"
@@ -146,11 +146,28 @@ jobs:
             rpc getblock "[\"$h\", 0]" | head -c 120; echo
           done
 
+          # Scan with an EXPLICIT recent birthday via `wallet restore` into a
+          # second directory. `wallet create` derives birthday = tip-100, which
+          # would scan ~100 blocks and hit the environmental request ceiling
+          # documented in audit/REGTEST-CLASSIFICATION.md; restoring at height
+          # 100 scans ~20 blocks and stays well inside it. This also exercises
+          # the restore path, which needs coverage regardless.
+          echo "── restore at an explicit birthday (second wallet dir) ──"
+          cp /tmp/zalkanes-wallet/keystore.age /tmp/zalkanes-restored-keystore.age
+          mkdir -p /tmp/zalkanes-wallet2
+          cp /tmp/zalkanes-restored-keystore.age /tmp/zalkanes-wallet2/keystore.age
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet restore --birthday 100
+
+          echo "── restored wallet has the SAME unified address ──"
+          UA_A=$("$BIN" wallet address)
+          UA_B=$(ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet address)
+          test "$UA_A" = "$UA_B"
+
           echo "── scan real regtest blocks while LOCKED ──"
-          "$BIN" wallet scan
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet scan
 
           echo "── wallet scanned identity == Zebra canonical tip ──"
-          "$BIN" wallet status | tee /tmp/status.txt
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet status | tee /tmp/status.txt
           grep -q "synced" /tmp/status.txt
           if grep -q "NOT synced" /tmp/status.txt; then
             echo "::error::wallet did not reach the canonical tip"; exit 1
@@ -158,17 +175,17 @@ jobs:
 
           echo "── mine further and rescan: wallet tracks the advancing tip ──"
           rpc generate '[5]' > /dev/null
-          "$BIN" wallet scan
-          "$BIN" wallet status | tee /tmp/status2.txt
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet scan
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet status | tee /tmp/status2.txt
           if grep -q "NOT synced" /tmp/status2.txt; then
             echo "::error::wallet did not track the advancing tip"; exit 1
           fi
 
           echo "── restart/reopen preserves wallet identity ──"
-          ADDR1=$("$BIN" wallet address)
-          ADDR2=$("$BIN" wallet address)   # fresh process = reopen
+          ADDR1=$(ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet address)
+          ADDR2=$(ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet address)
           test "$ADDR1" = "$ADDR2"
-          "$BIN" wallet scan               # reopen + rescan is idempotent
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet scan
 
           echo "── a shielded spend must be refused while LOCKED ──"
           if "$BIN" contract call $(printf '0%.0s' {1..64}) 1 --funding shielded --yes; then
