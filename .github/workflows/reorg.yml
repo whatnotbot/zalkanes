@@ -343,7 +343,7 @@ jobs:
           set -euo pipefail
           cargo build --release -p zalkanes-cli
           cargo build --release --target wasm32-unknown-unknown --manifest-path contracts/counter/Cargo.toml
-          ls -l target/wasm32-unknown-unknown/release/*.wasm
+          ls -l contracts/counter/target/wasm32-unknown-unknown/release/counter.wasm
 
       - name: fetch pinned zebrad release (verified checksum)
         run: |

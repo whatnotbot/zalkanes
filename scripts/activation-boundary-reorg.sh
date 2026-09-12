@@ -14,7 +14,7 @@ set -euo pipefail
 A=http://127.0.0.1:18232
 B=http://127.0.0.1:18242
 BIN=./target/release/zalkanes
-WASM=target/wasm32-unknown-unknown/release/counter.wasm
+WASM=contracts/counter/target/wasm32-unknown-unknown/release/counter.wasm
 ACT="${ZALKANES_REGTEST_ACTIVATION_HEIGHT:-120}"
 DATA=/tmp/zalkanes-data
 REINDEX=/tmp/zalkanes-reindex
@@ -100,7 +100,8 @@ fi
 
 echo "── deploying the counter above the activation height ──"
 $BIN contract deploy "$WASM" --funding transparent --yes 2>&1 | tee /tmp/deploy.log
-CID=$(grep -oE '[0-9a-f]{64}' /tmp/deploy.log | tail -1)
+CID=$(grep -E '^ContractId:' /tmp/deploy.log | awk '{print $2}')
+test -n "$CID"
 rpc $A generate '[2]' > /dev/null
 DEPLOYED=$(height $A)
 wait_indexed "$IDX" "$DEPLOYED"
