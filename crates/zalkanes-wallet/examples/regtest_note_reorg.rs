@@ -246,11 +246,14 @@ fn setup(common_blocks: u64) -> Result<Harness> {
     let wallet_path = dir.join("wallet.sqlite");
 
     let cs = ZebraCanonicalChainSource::new(a.url.clone(), ConsensusParams::Regtest)?;
+    // Birthday 2, not 1: `restore` reads the treestate at `birthday - 1`, and
+    // regtest genesis (height 0) predates every network upgrade, so it has no
+    // Orchard/Ironwood commitment trees to parse. Height 1 already has them.
     let wallet = Rc::new(SqliteShieldedWallet::restore(
         &wallet_path,
         ConsensusParams::Regtest,
         seed_from_env()?,
-        1,
+        2,
         &cs,
     )?);
     println!("wallet birthday: {}", wallet.birthday_height()?);
