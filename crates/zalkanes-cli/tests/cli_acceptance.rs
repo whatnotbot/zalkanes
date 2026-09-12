@@ -305,3 +305,41 @@ fn shielded_funding_never_silently_falls_back_to_transparent() {
         "shielded mode must never broadcast a transparent transaction"
     );
 }
+
+#[test]
+fn closing_stdout_early_does_not_panic() {
+    // Regression: `zalkanes wallet status | grep -q ...` panicked with
+    // "failed printing to stdout: Broken pipe" (found by the live regtest
+    // workflow). A CLI must exit quietly when its reader goes away.
+    use std::io::Read;
+    let e = Env::new("epipe");
+    let mut child = Command::new(bin())
+        .args(["wallet", "--help"])
+        .env("ZALKANES_WALLET_DIR", &e.dir)
+        .env("ZALKANES_NETWORK", "regtest")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("spawn");
+
+    // Read one byte then drop the pipe, closing it while output continues.
+    let mut stdout = child.stdout.take().unwrap();
+    let mut one = [0u8; 1];
+    let _ = stdout.read(&mut one);
+    drop(stdout);
+
+    let status = child.wait().expect("wait");
+    let mut err = String::new();
+    if let Some(mut e) = child.stderr.take() {
+        let _ = e.read_to_string(&mut err);
+    }
+    assert!(
+        !err.contains("panicked"),
+        "closing stdout must not panic the CLI:\n{err}"
+    );
+    assert_ne!(
+        status.code(),
+        Some(101),
+        "a panic exit code means EPIPE was not handled"
+    );
+}

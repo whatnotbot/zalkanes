@@ -193,10 +193,15 @@ jobs:
           fi
 
           echo "── unlock arms the session, lock disarms it ──"
-          "$BIN" wallet unlock
-          "$BIN" wallet status | grep -q UNLOCKED
-          "$BIN" wallet lock
-          "$BIN" wallet status | grep -q LOCKED
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet unlock
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet status > /tmp/st_unlocked.txt
+          grep -q UNLOCKED /tmp/st_unlocked.txt
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet lock
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet status > /tmp/st_locked.txt
+          grep -q LOCKED /tmp/st_locked.txt
+
+          echo "── stdout closing early must not panic (EPIPE handling) ──"
+          ZALKANES_WALLET_DIR=/tmp/zalkanes-wallet2 "$BIN" wallet status | head -1
 
           echo "── dry-run plans without side effects ──"
           "$BIN" contract call $(printf '0%.0s' {1..64}) 1 --dry-run || true

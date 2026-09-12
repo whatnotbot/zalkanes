@@ -166,6 +166,20 @@ async fn main() -> Result<()> {
         )
         .init();
 
+    // Unix tools must not panic when their stdout is closed early (e.g.
+    // `zalkanes wallet status | head -1`, or `| grep -q`). Rust's println!
+    // panics on EPIPE; translate that into the conventional quiet exit.
+    // (Done with a panic hook rather than resetting SIGPIPE, because this
+    // crate forbids unsafe code.)
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let msg = info.to_string();
+        if msg.contains("Broken pipe") || msg.contains("failed printing to stdout") {
+            std::process::exit(0);
+        }
+        default_hook(info);
+    }));
+
     let cli = Cli::parse();
 
     match cli.command {
