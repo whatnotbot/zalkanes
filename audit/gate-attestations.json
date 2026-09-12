@@ -17,13 +17,13 @@
     "live_note_level_reorg": {
       "satisfied": true,
       "evidence": "audit/LIVE-REORG-EVIDENCE.md",
-      "evidence_sha256": "ea9b0ab425689435a3e43f4326450b51dd6af794a31c6cdea42aeedf94172d85",
-      "note": "CI run 34682825442, two real zebrad v6.3.0 nodes. One OPEN observation recorded in the evidence (stale note row)."
+      "evidence_sha256": "b3ef3f821c19cee6616c14841b87ea417a9cca6acc5214fd1520395942aeedd3",
+      "note": "CI runs 34682825442 and 34685408616, real zebrad v6.3.0 nodes. CASE A/B/C incl. A->B->A. The retained-note-row observation is CLOSED: root cause is upstream un-mine-don't-delete truncation; no money path affected."
     },
     "activation_boundary_reorg": {
       "satisfied": true,
       "evidence": "audit/LIVE-REORG-EVIDENCE.md",
-      "evidence_sha256": "ea9b0ab425689435a3e43f4326450b51dd6af794a31c6cdea42aeedf94172d85",
+      "evidence_sha256": "b3ef3f821c19cee6616c14841b87ea417a9cca6acc5214fd1520395942aeedd3",
       "note": "CI run 34682825442. Fork below the activation height; persisted == restart == clean-reindex root."
     },
     "fresh_frozen_rc_testnet_activation": {
@@ -42,13 +42,15 @@
       "satisfied": false,
       "evidence": null,
       "evidence_sha256": null,
-      "note": "Cannot be true before an audit exists to produce findings."
+      "note": "Must equal 0 once an audit exists. Never set true on the grounds that no findings exist.",
+      "pending_on": "external_security_audit_complete"
     },
     "zero_unresolved_high": {
       "satisfied": false,
       "evidence": null,
       "evidence_sha256": null,
-      "note": "Cannot be true before an audit exists to produce findings."
+      "note": "Must equal 0 once an audit exists. Never set true on the grounds that no findings exist.",
+      "pending_on": "external_security_audit_complete"
     },
     "fixes_produced_new_immutable_rc": {
       "satisfied": false,
@@ -73,6 +75,20 @@
       "evidence": null,
       "evidence_sha256": null,
       "note": "Explicit owner approval required. Never inferred."
+    },
+    "auditor_final_candidate_signoff": {
+      "satisfied": false,
+      "evidence": null,
+      "evidence_sha256": null,
+      "final_commit": null,
+      "final_manifest_sha256": null,
+      "note": "Required whenever the final candidate's manifest hash differs from the audited candidate's - which it always will once a mainnet activation height is set. Either direct sign-off on the exact final candidate, or written delta confirmation naming that exact commit and manifest hash."
     }
+  },
+  "audited_candidate": {
+    "_comment": "The candidate an external auditor actually reviewed. Filled in ONLY when a real audit report exists.",
+    "tag": null,
+    "commit": null,
+    "manifest_sha256": null
   }
 }

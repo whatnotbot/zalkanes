@@ -57,6 +57,7 @@ No gate is ever asserted from reasoning, expectation, or a passing unit test.
 | 17 | Mainnet activation height chosen only after all the above | mechanical | the script refuses this gate while any other gate is unsatisfied |
 | 18 | Activation announcement/runbook reviewed | evidence | owner sign-off on the mainnet activation runbook |
 | 19 | Mainnet canary explicitly owner-approved | evidence | recorded owner approval; never inferred |
+| 20 | Final candidate IS the audited candidate, or the auditor signed off on it | mechanical + evidence | see "Candidate identity" below |
 
 ## Status today
 
@@ -92,6 +93,32 @@ not merely "not done yet":
    merely unsatisfied — they are unsatisfiable today. Gates 7 and 8 must never
    be set to `true` on the grounds that no findings exist; absence of an audit
    is not absence of findings.
+
+## Candidate identity — why an audit does not transfer
+
+`protocol/v0.toml` holds **both** `testnet_activation_height` and
+`mainnet_activation_height`, and the manifest hash is SHA-256 over that file.
+Setting a mainnet activation height therefore **changes the manifest hash and
+the candidate identity**. An audit of the testnet candidate does not audit the
+candidate that activates mainnet.
+
+The script enforces this. It compares `audited_candidate.manifest_sha256`
+against the candidate being released:
+
+- identical commit and manifest → the final candidate *is* the audited one;
+- otherwise the `auditor_final_candidate_signoff` gate must be satisfied **and**
+  its `final_commit` / `final_manifest_sha256` must name **this** candidate. A
+  sign-off naming a different commit does not count.
+
+Full lifecycle: `audit/RELEASE-CANDIDATE-LIFECYCLE.md`.
+
+## PASS, BLOCKED, UNKNOWN
+
+`UNKNOWN` marks a gate that cannot yet be evaluated at all — "zero unresolved
+Critical findings" is not `false` before an audit exists, it is unanswerable.
+It counts as unsatisfied exactly like `BLOCKED`; only the label differs, so
+"not yet answerable" can never be read as "answered yes". **UNKNOWN must never
+be converted to PASS** on the grounds that no findings have been reported.
 
 ## Rules for changing this file
 
