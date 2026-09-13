@@ -1,0 +1,22 @@
+[package]
+name = "subfrost-mathcheck"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace]
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+zalkanes-sdk = { path = "../../crates/zalkanes-sdk" }
+zalkanes-dex-core = { path = "../../crates/zalkanes-dex-core", default-features = false }
+wee_alloc = "=0.4.5"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+strip = true

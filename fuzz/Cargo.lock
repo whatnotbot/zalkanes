@@ -582,6 +582,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "subfrost-factory"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+ "zalkanes-dex-wasm",
+]
+
+[[package]]
+name = "subfrost-pool"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+ "zalkanes-dex-wasm",
+]
+
+[[package]]
 name = "syn"
 version = "2.0.119"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -590,6 +606,14 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
+]
+
+[[package]]
+name = "test-token"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+ "zalkanes-dex-wasm",
 ]
 
 [[package]]
@@ -796,6 +820,41 @@ dependencies = [
 ]
 
 [[package]]
+name = "zalkanes-dex-core"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-core",
+]
+
+[[package]]
+name = "zalkanes-dex-sdk"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-core",
+ "zalkanes-dex-core",
+]
+
+[[package]]
+name = "zalkanes-dex-testkit"
+version = "0.1.0"
+dependencies = [
+ "blake2b_simd",
+ "subfrost-factory",
+ "subfrost-pool",
+ "test-token",
+ "zalkanes-core",
+ "zalkanes-dex-core",
+ "zalkanes-dex-sdk",
+]
+
+[[package]]
+name = "zalkanes-dex-wasm"
+version = "0.1.0"
+dependencies = [
+ "zalkanes-dex-core",
+]
+
+[[package]]
 name = "zalkanes-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -803,6 +862,8 @@ dependencies = [
  "sha2",
  "zalkanes-carrier",
  "zalkanes-core",
+ "zalkanes-dex-core",
+ "zalkanes-dex-testkit",
  "zalkanes-protocol",
  "zalkanes-runtime",
  "zalkanes-state",

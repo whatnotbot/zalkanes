@@ -1,0 +1,21 @@
+[package]
+name = "zalkanes-dex-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Pure protocol layer of the SUBFROST AMM port: types, frozen v0 constants,
+# deterministic integer arithmetic, canonical pair ordering, error model,
+# and the proposed DEX host ABI (`host::Host`). No RPC, no wallet, no Zcash
+# transaction code, no floating point, no external I/O.
+
+[features]
+# "platform" pulls in zalkanes-core (ContractId etc.), which links std on
+# wasm32. Pure-math consumers (the mathcheck contract runs under the
+# frozen six-import ABI and must stay strictly no_std) disable it and get
+# only: v0, error, wide, math.
+default = ["platform"]
+platform = ["dep:zalkanes-core"]
+
+[dependencies]
+zalkanes-core = { path = "../zalkanes-core", optional = true }

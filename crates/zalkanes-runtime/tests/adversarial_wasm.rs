@@ -21,6 +21,8 @@ fn deployed(wasm: &[u8]) -> (MemoryState, ContractId) {
             deploys: vec![(id, CodeHash::of(wasm), wasm.to_vec())],
             upserts: vec![],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         })
         .unwrap();
     (state, id)

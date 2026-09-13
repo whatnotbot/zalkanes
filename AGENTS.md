@@ -14,6 +14,11 @@ agree on.
 - Do not set a mainnet activation height. Leave it `None` / unset.
 - Do not add floating git-branch dependencies (`branch = "main"`).
 - Do not implement out-of-scope features (bridges, DEX, FROST, governance — see spec §51).
+  - Branch exception: `feat/subfrost-amm-v0` carries the owner-commissioned
+    SUBFROST AMM as a strictly additive application layer (no consensus,
+    parser, runtime, fuel, state-root or host-ABI changes; see
+    `docs/subfrost-amm-v0.md` §"Upstream blockers"). Do not merge it into
+    an audit-candidate line without the host-ABI ADR process.
 - Do not silently upgrade `wasmi`. Any Wasmi version change is a protocol change.
 - Do not use JSON for consensus data encoding.
 - Do not trust RPC responses without defensive parsing.
@@ -60,6 +65,17 @@ contracts/counter          reference counter contract
 contracts/key-value        reference KV contract
 contracts/token            reference token contract
 contracts/caller           reference cross-contract call demo
+
+# feat/subfrost-amm-v0 branch only (SUBFROST AMM application layer):
+crates/zalkanes-dex-core     AMM types/constants/math/errors/host-ABI proposal
+crates/zalkanes-dex-wasm     wasm32 entry glue for the proposed DEX ABI
+crates/zalkanes-dex-sdk      AMM intents + views
+crates/zalkanes-dex-testkit  deterministic AMM runtime harness
+crates/zalkanes-dex-cli      `zalkanes-dex` dry-run CLI
+contracts/test-token         DEX test-only token
+contracts/subfrost-pool      AMM pool (proposed ABI)
+contracts/subfrost-factory   AMM factory (proposed ABI)
+contracts/subfrost-mathcheck AMM math probe (frozen six-import ABI)
 ```
 
 ## Key documents

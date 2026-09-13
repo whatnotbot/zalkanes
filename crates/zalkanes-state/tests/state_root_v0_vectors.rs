@@ -45,6 +45,8 @@ fn state_root_v0_vectors_are_reproduced_exactly() {
                     deploys: vec![],
                     upserts,
                     deletes: vec![],
+                    ledger_upserts: vec![],
+                    ledger_deletes: vec![],
                 })
                 .unwrap();
         }

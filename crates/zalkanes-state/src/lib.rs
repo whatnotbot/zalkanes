@@ -27,6 +27,11 @@ use zalkanes_core::{
 
 // ── BlockCommit / undo journal ───────────────────────────────────────────────
 
+/// V1 asset-ledger holder: 33-byte wire form (tag ‖ 32-byte id), ADR-0008.
+pub type LedgerHolder = [u8; 33];
+/// V1 asset id: 32 bytes (a contract's native asset id == its ContractId).
+pub type LedgerAsset = [u8; 32];
+
 /// All writes a single Zcash block produced, committed atomically.
 #[derive(Debug, Clone)]
 pub struct BlockCommit {
@@ -38,6 +43,11 @@ pub struct BlockCommit {
     pub upserts: Vec<(ContractId, Vec<u8>, Vec<u8>)>,
     /// Storage deletions: (contract_id, key).
     pub deletes: Vec<(ContractId, Vec<u8>)>,
+    /// V1 asset-ledger upserts: (holder, asset, new_amount > 0). Empty for
+    /// every pre-V1 block (ADR-0008).
+    pub ledger_upserts: Vec<(LedgerHolder, LedgerAsset, u128)>,
+    /// V1 asset-ledger row deletions (balance reached zero).
+    pub ledger_deletes: Vec<(LedgerHolder, LedgerAsset)>,
 }
 
 /// A single storage mutation recorded for undo.
@@ -67,6 +77,13 @@ enum UndoOp {
         /// redeploys): rollback restores it instead of deleting the id.
         prev: Option<(CodeHash, Vec<u8>)>,
     },
+    /// A V1 asset-ledger row changed; store the previous amount
+    /// (None = row did not exist).
+    Ledger {
+        holder: LedgerHolder,
+        asset: LedgerAsset,
+        prev: Option<u128>,
+    },
 }
 
 // ── StateStore trait ─────────────────────────────────────────────────────────
@@ -77,6 +94,8 @@ enum UndoOp {
 pub type ContractVisitor<'a> = dyn FnMut(&ContractId, &CodeHash, &[u8]) + 'a;
 /// Callback: visit a storage entry.
 pub type StorageVisitor<'a> = dyn FnMut(&ContractId, &[u8], &[u8]) + 'a;
+/// Callback: visit a V1 asset-ledger row.
+pub type LedgerVisitor<'a> = dyn FnMut(&LedgerHolder, &LedgerAsset, u128) + 'a;
 
 /// Object-safe so it can be shared as `Box<dyn StateStore>` behind a lock
 /// between the indexer (writer) and RPC server (reader).
@@ -87,6 +106,10 @@ pub trait StateStore: Send + Sync {
 
     // Storage (read)
     fn storage_get(&self, contract: &ContractId, key: &[u8]) -> Option<Vec<u8>>;
+
+    // V1 asset ledger (read). Always empty pre-V1 (ADR-0008).
+    fn ledger_get(&self, holder: &LedgerHolder, asset: &LedgerAsset) -> Option<u128>;
+    fn for_each_ledger(&self, f: &mut LedgerVisitor<'_>);
 
     // State root (always authoritative — recomputed from the store)
     fn compute_root(&self) -> StateRoot;
@@ -159,6 +182,23 @@ fn storage_leaf(contract_id: &[u8; 32], key: &[u8], value: &[u8]) -> [u8; 32] {
     out
 }
 
+/// V1 asset-ledger leaf (ADR-0008 §2): distinct personalization keeps the
+/// leaf domain separated from v0 contract/storage leaves.
+fn asset_leaf(holder: &LedgerHolder, asset: &LedgerAsset, amount: u128) -> [u8; 32] {
+    let mut input = Vec::with_capacity(33 + 32 + 16);
+    input.extend_from_slice(holder);
+    input.extend_from_slice(asset);
+    input.extend_from_slice(&amount.to_be_bytes());
+
+    let hash = Params::new()
+        .hash_length(32)
+        .personal(zalkanes_core::consensus::ASSET_LEAF_PERSONALIZATION)
+        .hash(&input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_bytes());
+    out
+}
+
 fn root_from_leaves(mut leaves: Vec<[u8; 32]>) -> StateRoot {
     leaves.sort_unstable();
     let mut input = Vec::with_capacity(leaves.len() * 32);
@@ -182,6 +222,9 @@ fn collect_leaves<S: StateStore>(store: &S) -> Vec<[u8; 32]> {
     store.for_each_storage(&mut |cid, key, value| {
         leaves.push(storage_leaf(&cid.0, key, value));
     });
+    store.for_each_ledger(&mut |holder, asset, amount| {
+        leaves.push(asset_leaf(holder, asset, amount));
+    });
     leaves
 }
 
@@ -196,11 +239,17 @@ pub fn projected_root(store: &dyn StateStore, commit: &BlockCommit) -> StateRoot
     let mut storage_map: std::collections::BTreeMap<([u8; 32], Vec<u8>), Vec<u8>> =
         std::collections::BTreeMap::new();
 
+    let mut ledger_map: std::collections::BTreeMap<(LedgerHolder, LedgerAsset), u128> =
+        std::collections::BTreeMap::new();
+
     store.for_each_contract(&mut |cid, code_hash, wasm| {
         contract_wasm.insert(cid.0, (code_hash.0, wasm.to_vec()));
     });
     store.for_each_storage(&mut |cid, key, value| {
         storage_map.insert((cid.0, key.to_vec()), value.to_vec());
+    });
+    store.for_each_ledger(&mut |holder, asset, amount| {
+        ledger_map.insert((*holder, *asset), amount);
     });
 
     for (id, code_hash, wasm) in &commit.deploys {
@@ -212,6 +261,12 @@ pub fn projected_root(store: &dyn StateStore, commit: &BlockCommit) -> StateRoot
     for (cid, key) in &commit.deletes {
         storage_map.remove(&(cid.0, key.clone()));
     }
+    for (holder, asset, amount) in &commit.ledger_upserts {
+        ledger_map.insert((*holder, *asset), *amount);
+    }
+    for (holder, asset) in &commit.ledger_deletes {
+        ledger_map.remove(&(*holder, *asset));
+    }
 
     let mut leaves = Vec::new();
     for (id, (code_hash, wasm)) in &contract_wasm {
@@ -219,6 +274,9 @@ pub fn projected_root(store: &dyn StateStore, commit: &BlockCommit) -> StateRoot
     }
     for ((id, key), value) in &storage_map {
         leaves.push(storage_leaf(id, key, value));
+    }
+    for ((holder, asset), amount) in &ledger_map {
+        leaves.push(asset_leaf(holder, asset, *amount));
     }
     root_from_leaves(leaves)
 }
@@ -230,6 +288,8 @@ pub fn projected_root(store: &dyn StateStore, commit: &BlockCommit) -> StateRoot
 pub struct MemoryState {
     pub contracts: std::collections::BTreeMap<[u8; 32], (CodeHash, Vec<u8>)>,
     pub storage: std::collections::BTreeMap<([u8; 32], Vec<u8>), Vec<u8>>,
+    /// V1 asset ledger (always empty pre-V1).
+    pub ledger: std::collections::BTreeMap<(LedgerHolder, LedgerAsset), u128>,
     metadata: Metadata,
     history: Vec<HeightRecord>,
     undo: std::collections::BTreeMap<BlockHeight, Vec<UndoOp>>,
@@ -254,6 +314,7 @@ impl MemoryState {
         Self {
             contracts: Default::default(),
             storage: Default::default(),
+            ledger: Default::default(),
             metadata: Default::default(),
             history: Vec::new(),
             undo: Default::default(),
@@ -271,6 +332,14 @@ impl StateStore for MemoryState {
     }
     fn storage_get(&self, contract: &ContractId, key: &[u8]) -> Option<Vec<u8>> {
         self.storage.get(&(contract.0, key.to_vec())).cloned()
+    }
+    fn ledger_get(&self, holder: &LedgerHolder, asset: &LedgerAsset) -> Option<u128> {
+        self.ledger.get(&(*holder, *asset)).copied()
+    }
+    fn for_each_ledger(&self, f: &mut LedgerVisitor<'_>) {
+        for ((holder, asset), amount) in &self.ledger {
+            f(holder, asset, *amount);
+        }
     }
     fn compute_root(&self) -> StateRoot {
         root_from_leaves(collect_leaves(self))
@@ -323,6 +392,24 @@ impl StateStore for MemoryState {
                     contract: ContractId(cid.0),
                     key: key.clone(),
                     prev,
+                });
+            }
+        }
+
+        for (holder, asset, amount) in &commit.ledger_upserts {
+            let prev = self.ledger.insert((*holder, *asset), *amount);
+            undo.push(UndoOp::Ledger {
+                holder: *holder,
+                asset: *asset,
+                prev,
+            });
+        }
+        for (holder, asset) in &commit.ledger_deletes {
+            if let Some(prev) = self.ledger.remove(&(*holder, *asset)) {
+                undo.push(UndoOp::Ledger {
+                    holder: *holder,
+                    asset: *asset,
+                    prev: Some(prev),
                 });
             }
         }
@@ -389,6 +476,18 @@ impl StateStore for MemoryState {
                                 self.contracts.remove(&contract.0);
                             }
                         },
+                        UndoOp::Ledger {
+                            holder,
+                            asset,
+                            prev,
+                        } => match prev {
+                            Some(v) => {
+                                self.ledger.insert((holder, asset), v);
+                            }
+                            None => {
+                                self.ledger.remove(&(holder, asset));
+                            }
+                        },
                     }
                 }
             }
@@ -433,6 +532,14 @@ fn storage_db_key(contract: &ContractId, key: &[u8]) -> Vec<u8> {
     k.push(b's');
     k.extend_from_slice(&contract.0);
     k.extend_from_slice(key);
+    k
+}
+
+fn ledger_db_key(holder: &LedgerHolder, asset: &LedgerAsset) -> Vec<u8> {
+    let mut k = Vec::with_capacity(1 + 33 + 32);
+    k.push(b'l');
+    k.extend_from_slice(holder);
+    k.extend_from_slice(asset);
     k
 }
 
@@ -525,6 +632,22 @@ fn encode_undo(ops: &[UndoOp]) -> Vec<u8> {
                     None => out.push(0x00),
                 }
             }
+            UndoOp::Ledger {
+                holder,
+                asset,
+                prev,
+            } => {
+                out.push(0x04);
+                out.extend_from_slice(holder);
+                out.extend_from_slice(asset);
+                match prev {
+                    Some(v) => {
+                        out.push(0x01);
+                        out.extend_from_slice(&v.to_be_bytes());
+                    }
+                    None => out.push(0x00),
+                }
+            }
         }
     }
     out
@@ -551,6 +674,37 @@ fn decode_undo(mut bytes: &[u8]) -> Vec<UndoOp> {
     for _ in 0..n {
         let Some(&tag) = bytes.first() else { break };
         bytes = &bytes[1..];
+
+        // Ledger (0x04): holder(33) + asset(32) + optional prev amount.
+        if tag == 0x04 {
+            if bytes.len() < 66 {
+                break;
+            }
+            let mut holder = [0u8; 33];
+            holder.copy_from_slice(&bytes[0..33]);
+            let mut asset = [0u8; 32];
+            asset.copy_from_slice(&bytes[33..65]);
+            let has_prev = bytes[65];
+            bytes = &bytes[66..];
+            let prev = if has_prev == 0x01 {
+                if bytes.len() < 16 {
+                    break;
+                }
+                let mut amt = [0u8; 16];
+                amt.copy_from_slice(&bytes[0..16]);
+                bytes = &bytes[16..];
+                Some(u128::from_be_bytes(amt))
+            } else {
+                None
+            };
+            ops.push(UndoOp::Ledger {
+                holder,
+                asset,
+                prev,
+            });
+            continue;
+        }
+
         if bytes.len() < 32 {
             break;
         }
@@ -727,6 +881,33 @@ impl StateStore for RocksState {
     fn storage_get(&self, contract: &ContractId, key: &[u8]) -> Option<Vec<u8>> {
         self.db.get(storage_db_key(contract, key)).ok().flatten()
     }
+    fn ledger_get(&self, holder: &LedgerHolder, asset: &LedgerAsset) -> Option<u128> {
+        let bytes = self.db.get(ledger_db_key(holder, asset)).ok().flatten()?;
+        let arr: [u8; 16] = bytes.try_into().ok()?;
+        Some(u128::from_be_bytes(arr))
+    }
+    fn for_each_ledger(&self, f: &mut LedgerVisitor<'_>) {
+        let iter = self.db.iterator(rocksdb::IteratorMode::From(
+            b"l",
+            rocksdb::Direction::Forward,
+        ));
+        for item in iter.flatten() {
+            let (key, value) = item;
+            if key.is_empty() || key[0] != b'l' {
+                continue;
+            }
+            if key.len() != 66 || value.len() != 16 {
+                continue;
+            }
+            let mut holder = [0u8; 33];
+            holder.copy_from_slice(&key[1..34]);
+            let mut asset = [0u8; 32];
+            asset.copy_from_slice(&key[34..66]);
+            let mut amt = [0u8; 16];
+            amt.copy_from_slice(&value);
+            f(&holder, &asset, u128::from_be_bytes(amt));
+        }
+    }
     fn compute_root(&self) -> StateRoot {
         root_from_leaves(collect_leaves(self))
     }
@@ -872,6 +1053,52 @@ impl StateStore for RocksState {
             }
         }
 
+        // V1 asset-ledger writes (empty pre-V1). Deletes see the commit's
+        // own upserts, mirroring MemoryState.
+        let ledger_upserted: std::collections::HashMap<(LedgerHolder, LedgerAsset), u128> = commit
+            .ledger_upserts
+            .iter()
+            .map(|(h, a, v)| ((*h, *a), *v))
+            .collect();
+        for (holder, asset, amount) in &commit.ledger_upserts {
+            let db_key = ledger_db_key(holder, asset);
+            let prev = self
+                .db
+                .get(&db_key)
+                .ok()
+                .flatten()
+                .and_then(|b| <[u8; 16]>::try_from(b).ok())
+                .map(u128::from_be_bytes);
+            batch.put(db_key, amount.to_be_bytes());
+            undo.push(UndoOp::Ledger {
+                holder: *holder,
+                asset: *asset,
+                prev,
+            });
+        }
+        for (holder, asset) in &commit.ledger_deletes {
+            let db_key = ledger_db_key(holder, asset);
+            let effective = ledger_upserted
+                .get(&(*holder, *asset))
+                .copied()
+                .or_else(|| {
+                    self.db
+                        .get(&db_key)
+                        .ok()
+                        .flatten()
+                        .and_then(|b| <[u8; 16]>::try_from(b).ok())
+                        .map(u128::from_be_bytes)
+                });
+            if let Some(prev) = effective {
+                batch.delete(db_key);
+                undo.push(UndoOp::Ledger {
+                    holder: *holder,
+                    asset: *asset,
+                    prev: Some(prev),
+                });
+            }
+        }
+
         // Write the journal BEFORE applying, so a crash mid-write is recoverable
         // by replaying from the journal on startup (see indexer reorg logic).
         batch.put(undo_db_key(commit.height), encode_undo(&undo));
@@ -956,6 +1183,16 @@ impl StateStore for RocksState {
                                 batch.put(contract_db_key(&contract), v);
                             }
                             None => batch.delete(contract_db_key(&contract)),
+                        },
+                        UndoOp::Ledger {
+                            holder,
+                            asset,
+                            prev,
+                        } => match prev {
+                            Some(v) => {
+                                batch.put(ledger_db_key(&holder, &asset), v.to_be_bytes());
+                            }
+                            None => batch.delete(ledger_db_key(&holder, &asset)),
                         },
                     }
                 }
@@ -1042,6 +1279,8 @@ mod tests {
             deploys: vec![(cid, code_hash, vec![0x00, 0x61, 0x73, 0x6D])],
             upserts: vec![],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         };
         let r1 = s.commit_block(commit).unwrap();
         assert_ne!(r0, r1, "deploy must change root");
@@ -1052,6 +1291,8 @@ mod tests {
             deploys: vec![],
             upserts: vec![(cid, b"key".to_vec(), b"value".to_vec())],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         };
         let r2 = s.commit_block(c2).unwrap();
         assert_ne!(r1, r2, "storage write must change root");
@@ -1096,6 +1337,8 @@ mod tests {
                 deploys: vec![(cid, code_hash, vec![0x00, 0x61, 0x73, 0x6D])],
                 upserts: vec![(cid, b"counter".to_vec(), 2u64.to_be_bytes().to_vec())],
                 deletes: vec![],
+                ledger_upserts: vec![],
+                ledger_deletes: vec![],
             })
             .unwrap()
         };

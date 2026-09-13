@@ -31,6 +31,9 @@ pub struct ParsedTransaction {
     pub outputs: Vec<(u16, Vec<u8>)>,
     /// (input_index, script_sig) for every transparent input.
     pub inputs: Vec<(u32, Vec<u8>)>,
+    /// First transparent input's prevout (txid(32) ‖ vout LE u32), if any.
+    /// V1 CALL auth binds to it (ADR-0008 §4).
+    pub first_prevout: Option<[u8; 36]>,
 }
 
 /// Network parameters for `Block::read`, bridged to librustzcash.
@@ -100,12 +103,19 @@ pub fn parse_block(
 
         let mut outputs = Vec::new();
         let mut inputs = Vec::new();
+        let mut first_prevout = None;
 
         if let Some(bundle) = tx.transparent_bundle() {
             for (idx, txout) in bundle.vout.iter().enumerate() {
                 outputs.push((idx as u16, txout.script_pubkey().0 .0.clone()));
             }
             for (idx, txin) in bundle.vin.iter().enumerate() {
+                if idx == 0 {
+                    let mut prevout = [0u8; 36];
+                    prevout[..32].copy_from_slice(txin.prevout().hash());
+                    prevout[32..].copy_from_slice(&txin.prevout().n().to_le_bytes());
+                    first_prevout = Some(prevout);
+                }
                 inputs.push((idx as u32, txin.script_sig().0 .0.clone()));
             }
         }
@@ -114,6 +124,7 @@ pub fn parse_block(
             txid,
             outputs,
             inputs,
+            first_prevout,
         });
     }
 

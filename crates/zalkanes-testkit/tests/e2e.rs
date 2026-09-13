@@ -91,6 +91,8 @@ fn counter_persists_across_rocksdb_reopen() {
                 2u64.to_be_bytes().to_vec(),
             )],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         };
         let r = rocks.commit_block(commit).unwrap();
         assert_eq!(r, root, "RocksState root must match MemoryState root");
@@ -167,6 +169,8 @@ fn reorg_rollback_matches_clean_replay() {
             deploys: vec![],
             upserts: vec![(id, b"counter".to_vec(), 1u64.to_be_bytes().to_vec())],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         })
         .unwrap();
     store
@@ -176,6 +180,8 @@ fn reorg_rollback_matches_clean_replay() {
             deploys: vec![],
             upserts: vec![(id, b"counter".to_vec(), 2u64.to_be_bytes().to_vec())],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         })
         .unwrap();
 

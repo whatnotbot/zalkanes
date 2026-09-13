@@ -15,6 +15,19 @@ members = [
     "crates/zalkanes-wallet",
     "crates/zalkanes-testkit",
     "crates/zalkanes-cli",
+    "crates/zalkanes-dex-core",
+    "crates/zalkanes-dex-wasm",
+    "crates/zalkanes-dex-sdk",
+    "crates/zalkanes-dex-testkit",
+    "crates/zalkanes-dex-cli",
+]
+# Contract packages keep their own workspaces (see note below) but are
+# path dependencies of zalkanes-dex-testkit; exclude them explicitly so
+# cargo does not treat them as second workspace roots.
+exclude = [
+    "contracts/test-token",
+    "contracts/subfrost-pool",
+    "contracts/subfrost-factory",
 ]
 # Contract crates under contracts/ are wasm32-only cdylib projects (no_std +
 # #[panic_handler]). They are NOT workspace members: build them explicitly with

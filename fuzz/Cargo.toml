@@ -15,6 +15,8 @@ zalkanes-protocol = { path = "../crates/zalkanes-protocol" }
 zalkanes-carrier  = { path = "../crates/zalkanes-carrier" }
 zalkanes-runtime  = { path = "../crates/zalkanes-runtime" }
 zalkanes-state    = { path = "../crates/zalkanes-state" }
+zalkanes-dex-core    = { path = "../crates/zalkanes-dex-core" }
+zalkanes-dex-testkit = { path = "../crates/zalkanes-dex-testkit" }
 
 # Standalone project: deliberately NOT a member of the root workspace (fuzz
 # builds run on nightly with sanitizer flags the workspace does not use).
@@ -51,6 +53,69 @@ bench = false
 [[bin]]
 name = "state_transition"
 path = "fuzz_targets/state_transition.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_pair_decode"
+path = "fuzz_targets/dex_pair_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_factory_calldata"
+path = "fuzz_targets/dex_factory_calldata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_pool_calldata"
+path = "fuzz_targets/dex_pool_calldata.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_initialize"
+path = "fuzz_targets/dex_initialize.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_add_liquidity"
+path = "fuzz_targets/dex_add_liquidity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_remove_liquidity"
+path = "fuzz_targets/dex_remove_liquidity.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_swap"
+path = "fuzz_targets/dex_swap.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_view_decode"
+path = "fuzz_targets/dex_view_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "dex_event_decode"
+path = "fuzz_targets/dex_event_decode.rs"
 test = false
 doc = false
 bench = false

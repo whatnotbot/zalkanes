@@ -115,6 +115,44 @@ pub const MSG_CALL: u8 = 0x02;
 /// Message type: CALL_CARRIER (large input delivered via P2SH carrier).
 pub const MSG_CALL_CARRIER: u8 = 0x03;
 
+// ── Protocol V1 (ADR-0008) ───────────────────────────────────────────────────
+// Strictly additive; v0 messages keep their exact semantics forever.
+
+/// Protocol version 1.
+pub const PROTOCOL_V1: u8 = 0x01;
+
+/// Message type: CALL_V1 (payload commitment; payload in P2SH carriers).
+pub const MSG_CALL_V1: u8 = 0x04;
+
+/// V1 mainnet activation height. MUST remain `None` (same audit gate as v0).
+pub const V1_MAINNET_ACTIVATION_HEIGHT: Option<u32> = None;
+
+/// V1 testnet activation height. None until a V1 RC freezes one.
+pub const V1_TESTNET_ACTIVATION_HEIGHT: Option<u32> = None;
+
+/// V1 regtest activation height (testing only).
+pub const V1_REGTEST_ACTIVATION_HEIGHT: Option<u32> = Some(2);
+
+/// Maximum assets attachable to one V1 CALL.
+pub const MAX_V1_ATTACHED_ASSETS: u8 = 4;
+
+/// Maximum V1 CALL carrier payload bytes (same cap as v0 carrier calldata).
+pub const MAX_CALL_V1_PAYLOAD_BYTES: u32 = 65_536;
+
+/// Maximum bytes of one contract event.
+pub const MAX_EVENT_BYTES: u32 = 1_024;
+
+/// Maximum events per top-level message.
+pub const MAX_EVENTS_PER_CALL: u32 = 64;
+
+/// V1 host-call fuel surcharges (ADR-0008 §17).
+pub const FUEL_ASSET_OP: u64 = 5_000;
+pub const FUEL_CONTRACT_CALL_BASE: u64 = 10_000;
+pub const FUEL_CONTRACT_SPAWN: u64 = 50_000;
+pub const FUEL_EVENT_BASE: u64 = 1_000;
+pub const FUEL_EVENT_PER_BYTE: u64 = 10;
+pub const FUEL_CONTEXT_OP: u64 = 100;
+
 // ── Activation heights ───────────────────────────────────────────────────────
 
 /// Mainnet activation height.
@@ -152,3 +190,15 @@ pub const STATE_LEAF_PERSONALIZATION: &[u8; 16] = b"ZalkStateLeaf0  ";
 
 /// Personalization for state root hashing. Exactly 16 bytes.
 pub const STATE_ROOT_PERSONALIZATION: &[u8; 16] = b"ZalkStateRoot0  ";
+
+/// Personalization for V1 asset-ledger leaves. Exactly 16 bytes.
+pub const ASSET_LEAF_PERSONALIZATION: &[u8; 16] = b"ZalkAssetLeaf1  ";
+
+/// Personalization for V1 external account ids. Exactly 16 bytes.
+pub const ACCOUNT_ID_PERSONALIZATION: &[u8; 16] = b"ZalkAccountId1  ";
+
+/// Personalization for V1 spawned-contract ids. Exactly 16 bytes.
+pub const SPAWN_ID_PERSONALIZATION: &[u8; 16] = b"ZalkSpawnId1    ";
+
+/// Personalization for the V1 CALL auth sighash. Exactly 16 bytes.
+pub const CALL_AUTH_PERSONALIZATION: &[u8; 16] = b"ZalkCallAuth1   ";

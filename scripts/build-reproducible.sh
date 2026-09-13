@@ -12,7 +12,7 @@ export CARGO_HOME="$ROOT/.cargo-reproducible"
 
 echo "==> Reproducible contract build"
 
-for contract in counter key-value token caller; do
+for contract in counter key-value token caller test-token subfrost-pool subfrost-factory subfrost-mathcheck; do
   echo ""
   echo "--- $contract ---"
   manifest="contracts/$contract/Cargo.toml"

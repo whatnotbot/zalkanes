@@ -1,0 +1,13 @@
+[package]
+name = "zalkanes-dex-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# wasm32 entry-point glue binding DEX contract logic to the PROPOSED DEX
+# host ABI (see docs/subfrost-amm-v0.md, "Upstream blockers"). On non-wasm
+# targets this crate is empty; contract logic is exercised natively through
+# zalkanes-dex-testkit instead.
+
+[dependencies]
+zalkanes-dex-core = { path = "../zalkanes-dex-core" }

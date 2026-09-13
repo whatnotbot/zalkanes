@@ -76,7 +76,7 @@ pub struct CallContext {
 /// `floating_point = false`, `simd = false`, `memory64 = false` (threads have
 /// no wasmi representation), plus `allow_start_fn(false)` — a start function
 /// would execute code outside the metered `dispatch` entry point.
-fn consensus_config() -> Config {
+pub(crate) fn consensus_config() -> Config {
     let mut config = Config::default();
     // NOTE: SIMD (and relaxed SIMD) are not compiled into this wasmi build at
     // all (the `simd` cargo feature is off), so SIMD modules are structurally
@@ -95,6 +95,29 @@ fn consensus_config() -> Config {
 /// The host functions the consensus linker provides (module "env"). Imports
 /// outside this set are rejected at validation time so an undeployable
 /// contract can never enter consensus state.
+pub mod v1;
+
+/// V1 host imports (ADR-0008): the six v0 imports plus the extension.
+pub const V1_HOST_IMPORTS: [&str; 17] = [
+    "storage_get",
+    "storage_set",
+    "storage_delete",
+    "output_write",
+    "context_block_height",
+    "input_read",
+    "context_self_id",
+    "context_caller",
+    "incoming_asset_count",
+    "incoming_asset_get",
+    "asset_transfer",
+    "asset_mint",
+    "asset_burn",
+    "emit_event",
+    "contract_call",
+    "contract_spawn",
+    "fuel_consume",
+];
+
 const HOST_IMPORTS: [&str; 6] = [
     "storage_get",
     "storage_set",
@@ -110,7 +133,7 @@ const HOST_IMPORTS: [&str; 6] = [
 /// node a deterministic panic is a network-wide halt, so a translation panic
 /// is converted into a deterministic rejection instead. The same input
 /// panics (and is therefore rejected) identically on every node.
-fn parse_module_contained(engine: &Engine, wasm: &[u8]) -> Result<Module, String> {
+pub(crate) fn parse_module_contained(engine: &Engine, wasm: &[u8]) -> Result<Module, String> {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| Module::new(engine, wasm))) {
         Ok(Ok(m)) => Ok(m),
         Ok(Err(e)) => Err(format!("WASM parse error: {e}")),
@@ -192,6 +215,44 @@ pub fn validate_module(wasm: &[u8]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// Validate a module against the PROTOCOL V1 host ABI (ADR-0008): identical
+/// checks to [`validate_module`] with the import allowlist extended by the
+/// V1 host functions. v0's validator is untouched; the indexer selects this
+/// one only for deploys at/after the V1 activation height.
+pub fn validate_module_v1(wasm: &[u8]) -> Result<(), String> {
+    match validate_module(wasm) {
+        Ok(()) => Ok(()),
+        Err(err) if err.contains("unresolvable import") => {
+            // Re-run only the import check with the extended allowlist; every
+            // other v0 constraint already passed above (the v0 validator
+            // checks imports LAST).
+            let parser = wasmparser::Parser::new(0);
+            for payload in parser.parse_all(wasm) {
+                if let wasmparser::Payload::ImportSection(sec) =
+                    payload.map_err(|e| format!("wasm parse error: {e}"))?
+                {
+                    for import in sec {
+                        let import = import.map_err(|e| format!("wasm import error: {e}"))?;
+                        let known = import.module == "env"
+                            && V1_HOST_IMPORTS.contains(&import.name)
+                            && matches!(import.ty, wasmparser::TypeRef::Func(_));
+                        if !known {
+                            return Err(format!(
+                                "unresolvable import {}::{} (V1 host ABI provides only env::{{{}}})",
+                                import.module,
+                                import.name,
+                                V1_HOST_IMPORTS.join(", ")
+                            ));
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+        Err(err) => Err(err),
+    }
 }
 
 struct ModuleCounts {
