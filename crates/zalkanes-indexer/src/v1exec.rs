@@ -11,7 +11,7 @@
 use std::collections::BTreeMap;
 
 use zalkanes_core::types::{CodeHash, ContractId};
-use zalkanes_runtime::v1::{AssetBytes, HolderBytes, V1Effects, V1StateView};
+use zalkanes_runtime::v1::{AssetBytes, HolderBytes, V1StateView};
 use zalkanes_state::{BlockCommit, StateStore};
 
 /// Per-block V1 bookkeeping.
@@ -45,25 +45,6 @@ impl BlockV1State {
     pub fn mirror_storage(&mut self, contract: ContractId, key: Vec<u8>, value: Option<Vec<u8>>) {
         if self.active {
             self.storage.insert((contract, key), value);
-        }
-    }
-
-    /// Fold a successful V1 execution's effects into the block overlay.
-    pub fn apply_effects(
-        &mut self,
-        effects: V1Effects,
-        code_of: impl Fn(&CodeHash) -> Option<Vec<u8>>,
-    ) {
-        self.any_v1 = true;
-        for (contract, key, value) in effects.storage {
-            self.storage.insert((contract, key), value);
-        }
-        for (holder, asset, amount) in effects.ledger {
-            self.ledger.insert((holder, asset), amount);
-        }
-        for (id, code_hash) in effects.spawns {
-            let code = code_of(&code_hash).expect("spawned code exists (validated in runtime)");
-            self.spawned.push((id, code_hash, code));
         }
     }
 

@@ -15,8 +15,9 @@
 //!   - rollback/reorg exact; clean reindex equal
 //!   - two independent nodes equal roots per block
 //!   - malformed input deterministic
-//! (Restart-equal for the ledger is covered at the state layer:
-//! `zalkanes-state/tests/ledger_v1.rs`.)
+//!
+//! Restart-equal for the ledger is covered at the state layer:
+//! `zalkanes-state/tests/ledger_v1.rs`.
 
 use zalkanes_core::types::{CodeHash, ContractId, Execution, Network};
 use zalkanes_dex_core::encode::{
@@ -483,10 +484,7 @@ fn swap_events_are_deterministic_and_decodable() {
 #[test]
 fn rollback_reorg_and_clean_reindex_are_exact() {
     let mut dex = setup();
-    let ancestor_height = {
-        let h = dex.chain.height();
-        h
-    };
+    let ancestor_height = dex.chain.height();
     let root_ancestor = dex.chain.state().compute_root();
 
     // Branch A: swap + swap.

@@ -12,7 +12,6 @@ use zalkanes_dex_core::encode::{
     token_initialize_args, token_mint_args, token_op,
 };
 use zalkanes_dex_core::types::{AssetId, Holder};
-use zalkanes_state::StateStore;
 use zalkanes_testkit::{external_holder_for, test_signer, TestChain, V1Call};
 
 const TOKEN_WASM: &[u8] = include_bytes!("../fixtures/test_token.wasm");

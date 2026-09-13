@@ -221,7 +221,7 @@ fn dust_and_overflow_fail_deterministically_on_wasmi() {
 #[test]
 fn dex_contract_wasm_is_float_free_and_blocked_only_by_the_abi() {
     // §40: the pool/factory/token modules must be rejected by the frozen
-    // validator ONLY because of the proposed `dex_*` imports — meaning
+    // validator ONLY because of the V1 host imports — meaning
     // they parse cleanly under the consensus engine config (floats
     // disabled, no start fn, section limits) and are float-free. This is
     // the precise upstream-blocker reproducer.
@@ -240,15 +240,14 @@ fn dex_contract_wasm_is_float_free_and_blocked_only_by_the_abi() {
         ),
     ] {
         let err = zalkanes_runtime::validate_module(wasm)
-            .expect_err("proposed-ABI modules cannot pass the frozen allowlist");
+            .expect_err("V1-ABI modules cannot pass the frozen v0 allowlist");
         assert!(
             err.contains("unresolvable import"),
             "{name}: expected an import-allowlist rejection (proving the \
              module otherwise satisfies the consensus profile), got: {err}"
         );
-        assert!(
-            err.contains("dex_"),
-            "{name}: blocked by a dex_* import: {err}"
-        );
+        // ...and the SAME bytes pass the PROTOCOL V1 validator (ADR-0008).
+        zalkanes_runtime::validate_module_v1(wasm)
+            .unwrap_or_else(|e| panic!("{name}: must pass the V1 validator: {e}"));
     }
 }
