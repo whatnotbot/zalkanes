@@ -15,12 +15,17 @@ use zalkanes_core::{
     types::{CodeHash, ContractId},
 };
 
+pub mod v1;
+
 /// A parsed Zalkanes protocol message.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Message {
     Deploy(DeployMessage),
     Call(CallMessage),
     CallCarrier(CallCarrierMessage),
+    /// V1 CALL commitment (ADR-0008). Produced ONLY by
+    /// [`parse_op_return_v1`]; the frozen v0 parser never emits it.
+    CallV1(v1::CallV1Commitment),
 }
 
 /// A DEPLOY message parsed from an OP_RETURN payload.
@@ -287,6 +292,48 @@ pub fn encode_call_carrier(msg: &CallCarrierMessage) -> Vec<u8> {
     out.extend_from_slice(&msg.input_length.to_be_bytes());
     out.push(msg.carrier_count);
     out
+}
+
+/// V1-aware parse (ADR-0008): used by the indexer at/after the V1
+/// activation height. Recognizes V1 CALL commitments and falls back to the
+/// frozen v0 parser for everything else. `parse_op_return` is untouched.
+pub fn parse_op_return_v1(payload: &[u8]) -> Result<Option<Message>, ParseError> {
+    use zalkanes_core::consensus::{MSG_CALL_V1, PROTOCOL_V1};
+    if payload.len() >= 6 && payload[0..4] == PROTOCOL_MAGIC && payload[4] == PROTOCOL_V1 {
+        if payload[5] != MSG_CALL_V1 {
+            return Err(ParseError::UnknownMessageType(payload[5]));
+        }
+        // magic(4) + ver(1) + type(1) + hash(32) + len(4) + count(1) = 43
+        if payload.len() < 43 {
+            return Err(ParseError::Truncated);
+        }
+        if payload.len() > 43 {
+            return Err(ParseError::TrailingBytes);
+        }
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&payload[6..38]);
+        let payload_length =
+            u32::from_be_bytes([payload[38], payload[39], payload[40], payload[41]]);
+        if payload_length > zalkanes_core::consensus::MAX_CALL_V1_PAYLOAD_BYTES {
+            return Err(ParseError::CarrierInputLengthExceedsMax(
+                payload_length,
+                zalkanes_core::consensus::MAX_CALL_V1_PAYLOAD_BYTES,
+            ));
+        }
+        let carrier_count = payload[42];
+        if carrier_count > zalkanes_core::consensus::MAX_CALL_CARRIER_CHUNKS {
+            return Err(ParseError::CarrierCountExceedsMax(
+                carrier_count,
+                zalkanes_core::consensus::MAX_CALL_CARRIER_CHUNKS,
+            ));
+        }
+        return Ok(Some(Message::CallV1(v1::CallV1Commitment {
+            payload_hash: hash,
+            payload_length,
+            carrier_count,
+        })));
+    }
+    parse_op_return(payload)
 }
 
 #[cfg(test)]

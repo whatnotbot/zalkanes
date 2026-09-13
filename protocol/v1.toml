@@ -1,0 +1,52 @@
+# Zalkanes PROTOCOL V1 manifest (ADR-0008). SHA-256 over these exact
+# bytes is the V1 manifest hash. protocol/v0.toml is UNCHANGED by V1.
+
+[protocol]
+version = 1
+wire_version = 1
+message_call_v1 = 4
+state_root_version = 1        # unchanged root personalization; new asset leaf
+
+[activation]
+mainnet_activation_height = "None"
+testnet_activation_height = "None"
+regtest_activation_height = 2
+
+[limits]
+max_v1_attached_assets = 4
+max_call_v1_payload_bytes = 65536
+max_event_bytes = 1024
+max_events_per_call = 64
+max_call_depth = 16
+
+[fuel_surcharges]
+asset_op = 5000
+contract_call_base = 10000
+contract_spawn = 50000
+event_base = 1000
+event_per_byte = 10
+context_op = 100
+
+[host_abi]
+imports = [
+    "storage_get", "storage_set", "storage_delete", "output_write",
+    "context_block_height", "input_read",
+    "context_self_id", "context_caller",
+    "incoming_asset_count", "incoming_asset_get",
+    "asset_transfer", "asset_mint", "asset_burn",
+    "emit_event", "contract_call", "contract_spawn", "fuel_consume",
+]
+
+[error_codes]
+not_initialized = 2
+zero_amount = 8
+insufficient_balance = 10
+overflow = 14
+invalid = 18
+exhausted = 20
+
+[derivations]
+account_id_personalization = "ZalkAccountId1  "
+spawn_id_personalization = "ZalkSpawnId1    "
+asset_leaf_personalization = "ZalkAssetLeaf1  "
+call_auth_personalization = "ZalkCallAuth1   "

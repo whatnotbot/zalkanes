@@ -5068,6 +5068,8 @@ version = "0.1.0"
 dependencies = [
  "blake2b_simd",
  "hex",
+ "secp256k1",
+ "serde_json",
  "subfrost-factory",
  "subfrost-pool",
  "test-token",
@@ -5075,6 +5077,7 @@ dependencies = [
  "zalkanes-dex-core",
  "zalkanes-dex-sdk",
  "zalkanes-runtime",
+ "zalkanes-state",
  "zalkanes-testkit",
 ]
 
@@ -5111,6 +5114,8 @@ version = "0.1.0"
 dependencies = [
  "blake2b_simd",
  "hex",
+ "secp256k1",
+ "serde_json",
  "sha2 0.10.8",
  "thiserror 1.0.64",
  "zalkanes-core",
@@ -5174,6 +5179,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "hex",
+ "secp256k1",
  "serde",
  "serde_json",
  "sha2 0.10.8",

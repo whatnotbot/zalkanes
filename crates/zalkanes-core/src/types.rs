@@ -55,6 +55,11 @@ pub struct Execution {
     pub state_root_after: StateRoot,
     pub block_height: BlockHeight,
     pub block_hash: BlockHash,
+    /// V1 events (ADR-0008 §10): (emitting contract, event bytes), commit
+    /// order. Always empty for v0 messages; defaulted so records persisted
+    /// before V1 deserialize unchanged.
+    #[serde(default)]
+    pub events: Vec<(ContractId, Vec<u8>)>,
 }
 
 /// Zcash network.
@@ -164,6 +169,69 @@ impl std::fmt::Display for TxId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", hex::encode(self.0))
     }
+}
+
+// ── Protocol V1 derivations (ADR-0008) ──────────────────────────────────────
+
+/// V1 external account id:
+/// BLAKE2b-256("ZalkAccountId1  ", network_id ‖ compressed pubkey(33)).
+/// `[0u8; 32]` is the reserved Anonymous account.
+#[must_use]
+pub fn v1_external_account_id(network: Network, compressed_pubkey: &[u8; 33]) -> [u8; 32] {
+    use blake2b_simd::Params;
+    let mut input = Vec::with_capacity(34);
+    input.push(network.id_byte());
+    input.extend_from_slice(compressed_pubkey);
+    let hash = Params::new()
+        .hash_length(32)
+        .personal(crate::consensus::ACCOUNT_ID_PERSONALIZATION)
+        .hash(&input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_bytes());
+    out
+}
+
+/// V1 spawned-contract id (ADR-0008 §9):
+/// BLAKE2b-256("ZalkSpawnId1    ",
+///             network_id ‖ txid(32) ‖ spawn_index(u16 BE) ‖ spawner(32) ‖ code_hash(32)).
+#[must_use]
+pub fn v1_spawned_contract_id(
+    network: Network,
+    txid: &TxId,
+    spawn_index: u16,
+    spawner: &ContractId,
+    code_hash: &CodeHash,
+) -> ContractId {
+    use blake2b_simd::Params;
+    let mut input = Vec::with_capacity(99);
+    input.push(network.id_byte());
+    input.extend_from_slice(&txid.0);
+    input.extend_from_slice(&spawn_index.to_be_bytes());
+    input.extend_from_slice(&spawner.0);
+    input.extend_from_slice(&code_hash.0);
+    let hash = Params::new()
+        .hash_length(32)
+        .personal(crate::consensus::SPAWN_ID_PERSONALIZATION)
+        .hash(&input);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(hash.as_bytes());
+    ContractId(out)
+}
+
+/// V1 activation height for a network (`None` = V1 never active).
+#[must_use]
+pub fn v1_activation_height(network: Network) -> Option<u32> {
+    match network {
+        Network::Mainnet => crate::consensus::V1_MAINNET_ACTIVATION_HEIGHT,
+        Network::Testnet => crate::consensus::V1_TESTNET_ACTIVATION_HEIGHT,
+        Network::Regtest => crate::consensus::V1_REGTEST_ACTIVATION_HEIGHT,
+    }
+}
+
+/// Is protocol V1 active at `height` on `network`?
+#[must_use]
+pub fn v1_active(network: Network, height: BlockHeight) -> bool {
+    v1_activation_height(network).is_some_and(|h| height >= h)
 }
 
 #[cfg(test)]

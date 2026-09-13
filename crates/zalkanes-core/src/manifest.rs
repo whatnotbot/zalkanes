@@ -29,6 +29,22 @@ pub fn protocol_manifest_hash_hex() -> String {
     hex::encode(protocol_manifest_hash())
 }
 
+/// The canonical PROTOCOL V1 manifest (ADR-0008), embedded at compile time.
+pub const PROTOCOL_V1_MANIFEST: &str = include_str!("../../../protocol/v1.toml");
+
+/// SHA-256 over the exact bytes of [`PROTOCOL_V1_MANIFEST`].
+pub fn protocol_v1_manifest_hash() -> [u8; 32] {
+    let digest = Sha256::digest(PROTOCOL_V1_MANIFEST.as_bytes());
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+/// The V1 manifest hash as lowercase hex.
+pub fn protocol_v1_manifest_hash_hex() -> String {
+    hex::encode(protocol_v1_manifest_hash())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

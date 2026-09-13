@@ -1,0 +1,37 @@
+{
+  "schema": "zalkanes-spawn-id-v1-vectors",
+  "vectors": [
+    {
+      "code_hash_byte": 187,
+      "contract_id_hex": "a432da2b4e8b4709d7e94abae5c9fce73104aa05e0d2b405879648cdbaf24407",
+      "network": "Regtest",
+      "spawn_index": 0,
+      "spawner_byte": 170,
+      "txid_byte": 1
+    },
+    {
+      "code_hash_byte": 187,
+      "contract_id_hex": "b56a96da3ca1bc3f90b3ddd5c7fbcadf4336e37fbdf17781d9c281f1746fa98b",
+      "network": "Regtest",
+      "spawn_index": 1,
+      "spawner_byte": 170,
+      "txid_byte": 1
+    },
+    {
+      "code_hash_byte": 187,
+      "contract_id_hex": "9241138f5540e9ed1454c6bec5292f570ea678407ac8a77b4799bc67dade7e9b",
+      "network": "Testnet",
+      "spawn_index": 0,
+      "spawner_byte": 170,
+      "txid_byte": 1
+    },
+    {
+      "code_hash_byte": 221,
+      "contract_id_hex": "df8d2adac25a89f4c395234210fd2c376dc8db2d18a137d6089c8d6195560e95",
+      "network": "Regtest",
+      "spawn_index": 0,
+      "spawner_byte": 204,
+      "txid_byte": 2
+    }
+  ]
+}

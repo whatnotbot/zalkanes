@@ -20,6 +20,9 @@ subfrost-factory = { path = "../../contracts/subfrost-factory" }
 test-token = { path = "../../contracts/test-token" }
 
 [dev-dependencies]
+serde_json = { workspace = true }
+secp256k1 = { workspace = true }
+zalkanes-state = { path = "../zalkanes-state" }
 zalkanes-testkit = { path = "../zalkanes-testkit" }
 zalkanes-runtime = { path = "../zalkanes-runtime" }
 hex = { workspace = true }

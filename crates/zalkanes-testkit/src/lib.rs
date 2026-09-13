@@ -108,6 +108,7 @@ impl TestChain {
             network: self.network,
             data_dir: std::path::PathBuf::from("/tmp/zalkanes-test"),
             regtest_activation_override: None,
+            regtest_v1_activation_override: None,
         }
     }
 
@@ -126,6 +127,7 @@ impl TestChain {
             txid: *txid,
             outputs: vec![(0u16, op_return_script(op_return)), (1u16, vec![0x51])],
             inputs,
+            first_prevout: None,
         };
         ParsedBlock {
             height,
@@ -142,6 +144,7 @@ impl TestChain {
             txid: *txid,
             outputs: vec![(0u16, op_return_script(op_return))],
             inputs: vec![(0u32, encode_coinbase_script(height))],
+            first_prevout: None,
         };
         ParsedBlock {
             height,
@@ -202,6 +205,7 @@ impl TestChain {
                 txid,
                 outputs: vec![(0u16, op_return_script(&encode_call(&msg)))],
                 inputs: vec![(0u32, encode_coinbase_script(height))],
+                first_prevout: None,
             });
         }
         let parsed = ParsedBlock {
@@ -232,6 +236,8 @@ impl TestChain {
                 deploys: vec![],
                 upserts: vec![],
                 deletes: vec![],
+                ledger_upserts: vec![],
+                ledger_deletes: vec![],
             })
             .with_context(|| "commit empty block")?;
         let _ = root_before;
@@ -351,5 +357,244 @@ mod tests {
         let a = TestChain::new().state_root();
         let b = TestChain::new().state_root();
         assert_eq!(a, b);
+    }
+}
+
+// ── Protocol V1 helpers (ADR-0008) ──────────────────────────────────────────
+
+/// One V1 CALL for the testkit's real-block V1 path.
+#[derive(Clone)]
+pub struct V1Call {
+    pub contract: ContractId,
+    pub opcode: u16,
+    pub input: Vec<u8>,
+    /// Attached assets (asset id, amount); requires `signer`.
+    pub attached: Vec<([u8; 32], u128)>,
+    /// Explicit recipient holder (33 bytes), if any.
+    pub recipient: Option<[u8; 33]>,
+    /// Auth signer; its ExternalId pays attachments and is the caller.
+    pub signer: Option<secp256k1::SecretKey>,
+}
+
+impl V1Call {
+    pub fn new(contract: ContractId, opcode: u16, input: Vec<u8>) -> Self {
+        Self {
+            contract,
+            opcode,
+            input,
+            attached: vec![],
+            recipient: None,
+            signer: None,
+        }
+    }
+}
+
+/// Deterministic test signing key n (1-based; must be nonzero mod order).
+#[must_use]
+pub fn test_signer(n: u8) -> secp256k1::SecretKey {
+    let mut bytes = [0u8; 32];
+    bytes[31] = n.max(1);
+    secp256k1::SecretKey::from_slice(&bytes).expect("valid test key")
+}
+
+/// The external holder (33 bytes) for a test signer on this network.
+#[must_use]
+pub fn external_holder_for(network: Network, key: &secp256k1::SecretKey) -> [u8; 33] {
+    let secp = secp256k1::Secp256k1::new();
+    let pubkey = secp256k1::PublicKey::from_secret_key(&secp, key);
+    let account = zalkanes_core::types::v1_external_account_id(network, &pubkey.serialize());
+    let mut holder = [0u8; 33];
+    holder[1..].copy_from_slice(&account);
+    holder
+}
+
+/// The contract-custody holder (33 bytes) for a contract id.
+#[must_use]
+pub fn contract_holder(id: &ContractId) -> [u8; 33] {
+    let mut holder = [0u8; 33];
+    holder[0] = 1;
+    holder[1..].copy_from_slice(&id.0);
+    holder
+}
+
+impl TestChain {
+    /// Deploy under the PROTOCOL V1 allowlist (extended host ABI). The
+    /// block must land at/after the V1 activation height (regtest: 2).
+    pub fn deploy_v1(&mut self, wasm: &[u8]) -> Result<ContractId> {
+        zalkanes_runtime::validate_module_v1(wasm)
+            .map_err(|e| anyhow::anyhow!("V1 WASM validation failed: {e}"))?;
+        if !self.indexer_config().v1_active(self.height + 1) {
+            bail!(
+                "deploy_v1 at height {} is below the V1 activation height",
+                self.height + 1
+            );
+        }
+
+        let code_hash = CodeHash::of(wasm);
+        let txid = synthetic_txid(self.height, 0);
+        let output_index: u16 = 0;
+        let contract_id = ContractId::derive(self.network, &txid, output_index, &code_hash);
+
+        let chunks = split(wasm, 4096);
+        let deploy_msg = DeployMessage {
+            code_hash,
+            code_length: wasm.len() as u32,
+            chunk_count: chunks.len() as u8,
+            output_index,
+        };
+        let parsed = self.deploy_parsed_block(&txid, &encode_deploy(&deploy_msg), &chunks);
+        self.height += 1;
+        let config = self.indexer_config();
+        process_parsed_block(&mut self.state, &config, parsed)
+            .with_context(|| "process V1 deploy block")?;
+        Ok(contract_id)
+    }
+
+    /// Execute one V1 CALL in its own block; returns the execution record.
+    pub fn call_v1(&mut self, call: V1Call) -> Result<zalkanes_core::types::Execution> {
+        let mut records = self.calls_v1_block(vec![call])?;
+        Ok(records.remove(0))
+    }
+
+    /// Execute several V1 CALLs in ONE block (sequential visibility),
+    /// returning each message's execution record in order.
+    pub fn calls_v1_block(
+        &mut self,
+        calls: Vec<V1Call>,
+    ) -> Result<Vec<zalkanes_core::types::Execution>> {
+        use zalkanes_protocol::v1 as pv1;
+
+        let height = self.height + 1;
+        let hash = BlockHash(synthetic_hash(height));
+        let mut transactions = Vec::with_capacity(calls.len());
+        let mut txids = Vec::with_capacity(calls.len());
+
+        for (i, call) in calls.iter().enumerate() {
+            let txid = synthetic_txid(self.height, (i + 1) as u32);
+            // Deterministic synthetic funding prevout for auth binding.
+            let mut prevout = [0u8; 36];
+            prevout[..32].copy_from_slice(&synthetic_txid(self.height, 0xffff - i as u32).0);
+
+            let mut payload = pv1::CallV1Payload {
+                contract_id: call.contract,
+                opcode: call.opcode,
+                attached: call.attached.clone(),
+                recipient: call.recipient,
+                input: call.input.clone(),
+                auth: None,
+            };
+            if let Some(signer) = &call.signer {
+                let (pubkey, sig) = pv1::sign_call_v1(self.network, &prevout, &payload, signer);
+                payload.auth = Some((pubkey, sig));
+            }
+            let payload_bytes = pv1::encode_call_v1_payload(&payload);
+            let payload_hash: [u8; 32] = Sha256::digest(&payload_bytes).into();
+            let chunks = split(&payload_bytes, 4096);
+            let commitment = pv1::CallV1Commitment {
+                payload_hash,
+                payload_length: payload_bytes.len() as u32,
+                carrier_count: chunks.len() as u8,
+            };
+
+            let mut inputs = vec![(0u32, encode_coinbase_script(height))];
+            for (ci, chunk) in chunks.iter().enumerate() {
+                inputs.push((
+                    (ci + 1) as u32,
+                    encode_carrier_script_sig(chunk.index, &chunk.data),
+                ));
+            }
+            transactions.push(ParsedTransaction {
+                txid,
+                outputs: vec![(
+                    0u16,
+                    op_return_script(&pv1::encode_call_v1_commitment(&commitment)),
+                )],
+                inputs,
+                first_prevout: Some(prevout),
+            });
+            txids.push(txid);
+        }
+
+        let parsed = ParsedBlock {
+            height,
+            hash,
+            transactions,
+        };
+        self.height += 1;
+        let config = self.indexer_config();
+        process_parsed_block(&mut self.state, &config, parsed)
+            .with_context(|| "process V1 call block")?;
+
+        let mut records = Vec::with_capacity(txids.len());
+        for txid in txids {
+            records.push(
+                self.state
+                    .execution(&txid)
+                    .with_context(|| format!("missing execution record for {txid}"))?,
+            );
+        }
+        Ok(records)
+    }
+
+    /// Reset the chain's height cursor (after `state_mut().rollback_to`,
+    /// so subsequent synthetic blocks continue from the reorg point).
+    pub fn set_height(&mut self, height: BlockHeight) {
+        self.height = height;
+    }
+
+    /// V1 asset-ledger balance.
+    #[must_use]
+    pub fn ledger_balance(&self, holder: &[u8; 33], asset: &[u8; 32]) -> u128 {
+        self.state.ledger_get(holder, asset).unwrap_or(0)
+    }
+}
+
+/// Plain-store V1 view (no in-block overlay) for read-only execution.
+struct StoreV1View<'a>(&'a MemoryState);
+
+impl zalkanes_runtime::v1::V1StateView for StoreV1View<'_> {
+    fn contract_code(&self, id: &ContractId) -> Option<(CodeHash, Vec<u8>)> {
+        self.0.get_contract(id)
+    }
+    fn code_by_hash(&self, hash: &CodeHash) -> Option<Vec<u8>> {
+        let mut found = None;
+        self.0.for_each_contract(&mut |_, code_hash, wasm| {
+            if found.is_none() && code_hash == hash {
+                found = Some(wasm.to_vec());
+            }
+        });
+        found
+    }
+    fn storage_get(&self, contract: &ContractId, key: &[u8]) -> Option<Vec<u8>> {
+        StateStore::storage_get(self.0, contract, key)
+    }
+    fn ledger_get(&self, holder: &[u8; 33], asset: &[u8; 32]) -> Option<u128> {
+        StateStore::ledger_get(self.0, holder, asset)
+    }
+}
+
+impl TestChain {
+    /// Read-only V1 execution (quotes/views on V1 contracts): effects are
+    /// discarded; the output bytes are returned.
+    pub fn view_v1(&self, contract: ContractId, opcode: u16, input: &[u8]) -> Result<Vec<u8>> {
+        use zalkanes_runtime::v1::{execute_v1, V1CallSpec, V1Outcome, ANONYMOUS_HOLDER};
+        let spec = V1CallSpec {
+            target: contract,
+            opcode,
+            input: input.to_vec(),
+            caller: ANONYMOUS_HOLDER,
+            attached: vec![],
+            debit_from: None,
+            height: self.height,
+            txid: synthetic_txid(self.height, 0xfffe),
+            network: self.network,
+            fuel_limit: zalkanes_core::consensus::MAX_FUEL_PER_CALL,
+        };
+        match execute_v1(&StoreV1View(&self.state), spec) {
+            V1Outcome::Success { output, .. } => Ok(output),
+            V1Outcome::Trap { reason, .. } => bail!("view_v1 trapped: {reason}"),
+            V1Outcome::FuelExhausted { .. } => bail!("view_v1 out of fuel"),
+            V1Outcome::ContractNotFound => bail!("view_v1: contract not found"),
+        }
     }
 }

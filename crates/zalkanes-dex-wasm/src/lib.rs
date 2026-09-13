@@ -26,7 +26,7 @@ pub mod wasm {
     use zalkanes_dex_core::types::{AssetId, ContractId, Holder};
 
     /// Proposed `env` imports. The first six exist in Zalkanes v0 today;
-    /// every `dex_*` function is the requested ABI extension.
+    /// the remaining functions are the ADR-0008 V1 extension.
     // SAFETY justification for this module's `unsafe`: FFI to host
     // functions whose pointer/length contracts are defined by the ABI
     // proposal; all buffers passed are owned, correctly sized locals.
@@ -40,15 +40,15 @@ pub mod wasm {
             pub fn input_read(out_ptr: i32, offset: i32, len: i32) -> i32;
             pub fn output_write(ptr: i32, len: i32) -> i32;
             // ── proposed DEX extension ──────────────────────────────
-            pub fn dex_self_id(out_ptr: i32) -> i32;
-            pub fn dex_caller(out_ptr: i32) -> i32;
-            pub fn dex_incoming_count() -> i32;
-            pub fn dex_incoming_get(index: i32, out_ptr: i32) -> i32;
-            pub fn dex_transfer_out(to_ptr: i32, asset_ptr: i32, amount_ptr: i32) -> i32;
-            pub fn dex_mint_own(to_ptr: i32, amount_ptr: i32) -> i32;
-            pub fn dex_burn_own(amount_ptr: i32) -> i32;
-            pub fn dex_emit_event(ptr: i32, len: i32) -> i32;
-            pub fn dex_call(
+            pub fn context_self_id(out_ptr: i32) -> i32;
+            pub fn context_caller(out_ptr: i32) -> i32;
+            pub fn incoming_asset_count() -> i32;
+            pub fn incoming_asset_get(index: i32, out_ptr: i32) -> i32;
+            pub fn asset_transfer(to_ptr: i32, asset_ptr: i32, amount_ptr: i32) -> i32;
+            pub fn asset_mint(to_ptr: i32, amount_ptr: i32) -> i32;
+            pub fn asset_burn(amount_ptr: i32) -> i32;
+            pub fn emit_event(ptr: i32, len: i32) -> i32;
+            pub fn contract_call(
                 target_ptr: i32,
                 opcode: i32,
                 input_ptr: i32,
@@ -58,8 +58,8 @@ pub mod wasm {
                 out_ptr: i32,
                 out_cap: i32,
             ) -> i32;
-            pub fn dex_spawn(template_ptr: i32, out_ptr: i32) -> i32;
-            pub fn dex_consume_fuel(units: i64) -> i32;
+            pub fn contract_spawn(template_ptr: i32, out_ptr: i32) -> i32;
+            pub fn fuel_consume(units: i64) -> i32;
         }
     }
 
@@ -80,7 +80,7 @@ pub mod wasm {
         fn self_id(&self) -> ContractId {
             let mut buf = [0u8; 32];
             unsafe {
-                ffi::dex_self_id(buf.as_mut_ptr() as i32);
+                ffi::context_self_id(buf.as_mut_ptr() as i32);
             }
             ContractId(buf)
         }
@@ -88,7 +88,7 @@ pub mod wasm {
         fn caller(&self) -> Holder {
             let mut buf = [0u8; 33];
             unsafe {
-                ffi::dex_caller(buf.as_mut_ptr() as i32);
+                ffi::context_caller(buf.as_mut_ptr() as i32);
             }
             Holder::from_bytes(&buf).unwrap_or(Holder::External(
                 zalkanes_dex_core::types::AccountId([0u8; 32]),
@@ -104,11 +104,11 @@ pub mod wasm {
         }
 
         fn incoming_assets(&self) -> Vec<(AssetId, u128)> {
-            let count = unsafe { ffi::dex_incoming_count() }.max(0) as usize;
+            let count = unsafe { ffi::incoming_asset_count() }.max(0) as usize;
             let mut out = Vec::with_capacity(count);
             for i in 0..count {
                 let mut buf = [0u8; 48];
-                let rc = unsafe { ffi::dex_incoming_get(i as i32, buf.as_mut_ptr() as i32) };
+                let rc = unsafe { ffi::incoming_asset_get(i as i32, buf.as_mut_ptr() as i32) };
                 if rc < 0 {
                     break;
                 }
@@ -171,7 +171,7 @@ pub mod wasm {
             let to_bytes = to.to_bytes();
             let amount_bytes = amount.to_be_bytes();
             let rc = unsafe {
-                ffi::dex_transfer_out(
+                ffi::asset_transfer(
                     to_bytes.as_ptr() as i32,
                     asset.0.as_ptr() as i32,
                     amount_bytes.as_ptr() as i32,
@@ -187,9 +187,8 @@ pub mod wasm {
         fn mint_own_asset(&mut self, to: &Holder, amount: u128) -> Result<(), DexError> {
             let to_bytes = to.to_bytes();
             let amount_bytes = amount.to_be_bytes();
-            let rc = unsafe {
-                ffi::dex_mint_own(to_bytes.as_ptr() as i32, amount_bytes.as_ptr() as i32)
-            };
+            let rc =
+                unsafe { ffi::asset_mint(to_bytes.as_ptr() as i32, amount_bytes.as_ptr() as i32) };
             if rc == 0 {
                 Ok(())
             } else {
@@ -199,7 +198,7 @@ pub mod wasm {
 
         fn burn_own_asset(&mut self, amount: u128) -> Result<(), DexError> {
             let amount_bytes = amount.to_be_bytes();
-            let rc = unsafe { ffi::dex_burn_own(amount_bytes.as_ptr() as i32) };
+            let rc = unsafe { ffi::asset_burn(amount_bytes.as_ptr() as i32) };
             if rc == 0 {
                 Ok(())
             } else {
@@ -210,7 +209,7 @@ pub mod wasm {
         fn emit_event(&mut self, event: &DexEvent) {
             let bytes = event.encode();
             unsafe {
-                ffi::dex_emit_event(bytes.as_ptr() as i32, bytes.len() as i32);
+                ffi::emit_event(bytes.as_ptr() as i32, bytes.len() as i32);
             }
         }
 
@@ -228,7 +227,7 @@ pub mod wasm {
             }
             let mut out = alloc::vec![0u8; MAX_VALUE];
             let rc = unsafe {
-                ffi::dex_call(
+                ffi::contract_call(
                     target.0.as_ptr() as i32,
                     i32::from(opcode),
                     input.as_ptr() as i32,
@@ -249,7 +248,7 @@ pub mod wasm {
         fn spawn(&mut self, template_code_hash: &[u8; 32]) -> Result<ContractId, DexError> {
             let mut out = [0u8; 32];
             let rc = unsafe {
-                ffi::dex_spawn(template_code_hash.as_ptr() as i32, out.as_mut_ptr() as i32)
+                ffi::contract_spawn(template_code_hash.as_ptr() as i32, out.as_mut_ptr() as i32)
             };
             if rc == 0 {
                 Ok(ContractId(out))
@@ -259,7 +258,7 @@ pub mod wasm {
         }
 
         fn consume_fuel(&mut self, units: u64) -> Result<(), DexError> {
-            let rc = unsafe { ffi::dex_consume_fuel(units as i64) };
+            let rc = unsafe { ffi::fuel_consume(units as i64) };
             if rc == 0 {
                 Ok(())
             } else {

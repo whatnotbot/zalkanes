@@ -1,0 +1,115 @@
+{
+  "schema": "zalkanes-execution-v2-dex-vectors",
+  "steps": [
+    {
+      "fuel": [],
+      "height": 1,
+      "root": "b120099c167da673588b15aa827c3bbd9339a9a2d934b0d20c99cebe69f8ffe6",
+      "step": "pre-v1-block",
+      "success": []
+    },
+    {
+      "fuel": [],
+      "height": 5,
+      "root": "56de6f44442783f9f3ab0accb56ce40949f5a5e6edd6dd0d52b647589c68848a",
+      "step": "deploys",
+      "success": []
+    },
+    {
+      "fuel": [
+        4040,
+        4040,
+        9712,
+        9712,
+        9721
+      ],
+      "height": 10,
+      "root": "6dc9e26bd343a2c1846f3d752937edd5fc9f9c100227fba80e7a2d9af6b75b67",
+      "step": "token-setup",
+      "success": [
+        true,
+        true,
+        true,
+        true,
+        true
+      ]
+    },
+    {
+      "fuel": [
+        3502,
+        169703
+      ],
+      "height": 12,
+      "root": "c506eb83b87771d6d4be4eacaef06f5dfee56c935248dff89f71cc7a1b33e60f",
+      "step": "factory-and-pool",
+      "success": [
+        true,
+        true
+      ]
+    },
+    {
+      "fuel": [
+        34628,
+        34628
+      ],
+      "height": 13,
+      "root": "97b147d65cf5a25021b7506b5e835ea88f2a40ee038e3bef85ff55fd8e7fea1d",
+      "step": "two-swap-block",
+      "success": [
+        true,
+        true
+      ]
+    },
+    {
+      "fuel": [
+        23601
+      ],
+      "height": 14,
+      "root": "97b147d65cf5a25021b7506b5e835ea88f2a40ee038e3bef85ff55fd8e7fea1d",
+      "step": "failing-swap-block",
+      "success": [
+        false
+      ]
+    },
+    {
+      "rows": [
+        {
+          "amount": "2365132",
+          "asset": "307345c4333413239bdd5955604070c1d6171355917438b7b181fe761bfedaa5",
+          "holder": "002b0608849382dd6cfac6c4a390eb84832ea2cba343de156edbfd8a63dd04b6d4"
+        },
+        {
+          "amount": "49000000",
+          "asset": "469290bf888d29960f62bfda648bf8b0c132a59b03c4aa42d3d11e866b9c38b7",
+          "holder": "002b0608849382dd6cfac6c4a390eb84832ea2cba343de156edbfd8a63dd04b6d4"
+        },
+        {
+          "amount": "983305509",
+          "asset": "307345c4333413239bdd5955604070c1d6171355917438b7b181fe761bfedaa5",
+          "holder": "005f2f9696dc3eeb1dacd42bfdfccfb08e3720f799f49df54d4664c05665d12b7a"
+        },
+        {
+          "amount": "994000000",
+          "asset": "469290bf888d29960f62bfda648bf8b0c132a59b03c4aa42d3d11e866b9c38b7",
+          "holder": "005f2f9696dc3eeb1dacd42bfdfccfb08e3720f799f49df54d4664c05665d12b7a"
+        },
+        {
+          "amount": "9999000",
+          "asset": "949b591ec2e5f9dd79018e0c1c52daca159e0e30a5be41acb5b0f1ea08416a82",
+          "holder": "005f2f9696dc3eeb1dacd42bfdfccfb08e3720f799f49df54d4664c05665d12b7a"
+        },
+        {
+          "amount": "14329359",
+          "asset": "307345c4333413239bdd5955604070c1d6171355917438b7b181fe761bfedaa5",
+          "holder": "01949b591ec2e5f9dd79018e0c1c52daca159e0e30a5be41acb5b0f1ea08416a82"
+        },
+        {
+          "amount": "7000000",
+          "asset": "469290bf888d29960f62bfda648bf8b0c132a59b03c4aa42d3d11e866b9c38b7",
+          "holder": "01949b591ec2e5f9dd79018e0c1c52daca159e0e30a5be41acb5b0f1ea08416a82"
+        }
+      ],
+      "step": "final-ledger"
+    }
+  ]
+}

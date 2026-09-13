@@ -35,6 +35,12 @@ pub type SharedState = Arc<RwLock<Box<dyn StateStore>>>;
 pub struct InfoResponse {
     pub protocol_version: u8,
     pub protocol_manifest_hash: String,
+    /// PROTOCOL V1 (ADR-0008): manifest hash and activation height for
+    /// this network. Additive; absent pre-V1 clients ignore them.
+    #[serde(default)]
+    pub protocol_v1_manifest_hash: Option<String>,
+    #[serde(default)]
+    pub protocol_v1_activation_height: Option<u32>,
     pub network: String,
     pub indexed_height: Option<BlockHeight>,
     pub chain_tip_height: Option<BlockHeight>,
@@ -116,6 +122,10 @@ impl RpcHandler {
         InfoResponse {
             protocol_version: 0,
             protocol_manifest_hash: zalkanes_core::protocol_manifest_hash_hex(),
+            protocol_v1_manifest_hash: Some(
+                zalkanes_core::manifest::protocol_v1_manifest_hash_hex(),
+            ),
+            protocol_v1_activation_height: zalkanes_core::types::v1_activation_height(self.network),
             network: self.network.zebra_name().to_string(),
             indexed_height,
             chain_tip_height,

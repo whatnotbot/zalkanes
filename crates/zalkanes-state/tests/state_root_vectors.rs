@@ -35,6 +35,8 @@ fn state_root_matches_reference_vectors() {
             deploys: vec![(cid, code_hash, wasm)],
             upserts: vec![(cid, key, value)],
             deletes: vec![],
+            ledger_upserts: vec![],
+            ledger_deletes: vec![],
         })
         .unwrap();
 

@@ -50,6 +50,8 @@ fn commit_for(height: u32) -> BlockCommit {
         deploys,
         upserts,
         deletes,
+        ledger_upserts: vec![],
+        ledger_deletes: vec![],
     }
 }
 

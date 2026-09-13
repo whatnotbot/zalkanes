@@ -418,6 +418,7 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
         network,
         data_dir: dir.clone(),
         regtest_activation_override: activation_override,
+        regtest_v1_activation_override: None,
     };
 
     // Validate upstream connection + fetch initial tip, retrying with backoff
@@ -550,6 +551,8 @@ async fn indexing_loop(
                         deploys: Vec::new(),
                         upserts: Vec::new(),
                         deletes: Vec::new(),
+                        ledger_upserts: vec![],
+                        ledger_deletes: vec![],
                     })?;
                     tracing::info!(
                         height = target,
