@@ -41,7 +41,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo test --release --workspace
 cargo deny check
+scripts/check-docs.sh      # links, CLI examples, manifest hash, activation metadata
 ```
+
+Developer-facing documentation lives in `docs/developers/`; keep CLI
+examples there runnable (`scripts/dev-quickstart-test.sh` executes the
+quickstart verbatim).
 
 ## Code style
 

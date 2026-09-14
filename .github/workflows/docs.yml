@@ -1,0 +1,19 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    name: documentation consistency
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The candidate tag identity check needs the tags.
+          fetch-depth: 0
+          fetch-tags: true
+      - name: check links, CLI examples, manifest hash, activation metadata, candidate identity
+        run: scripts/check-docs.sh

@@ -92,9 +92,9 @@ enum WalletCmd {
 
 #[derive(Subcommand)]
 enum ContractCmd {
-    /// Build a contract for wasm32-unknown-unknown
+    /// Build a contract for wasm32-unknown-unknown (release, stripped)
     Build {
-        /// Path to the contract crate
+        /// Path to the contract crate directory or to its Cargo.toml
         #[arg(long, default_value = "./contracts/counter")]
         manifest_path: String,
     },
@@ -690,7 +690,24 @@ async fn handle_reorg(source: &Arc<RpcChainSource>, store: &SharedState) -> Resu
 // ── contract build ───────────────────────────────────────────────────────────
 
 fn contract_build(manifest_path: &str) -> Result<()> {
+    use std::path::Path;
     use std::process::Command;
+
+    // Accept either the crate directory or its Cargo.toml: cargo itself only
+    // accepts the file, but developers naturally point at the directory.
+    let given = Path::new(manifest_path);
+    let manifest = if given.is_dir() {
+        given.join("Cargo.toml")
+    } else {
+        given.to_path_buf()
+    };
+    if !manifest.is_file() {
+        bail!("no Cargo.toml at {}", manifest.display());
+    }
+    let manifest_str = manifest
+        .to_str()
+        .context("manifest path is not valid UTF-8")?;
+
     let status = Command::new("cargo")
         .args([
             "build",
@@ -698,7 +715,7 @@ fn contract_build(manifest_path: &str) -> Result<()> {
             "--target",
             "wasm32-unknown-unknown",
             "--manifest-path",
-            manifest_path,
+            manifest_str,
         ])
         .env("RUSTFLAGS", "-C link-arg=-s")
         .env("SOURCE_DATE_EPOCH", "0")
@@ -707,7 +724,21 @@ fn contract_build(manifest_path: &str) -> Result<()> {
     if !status.success() {
         bail!("cargo build exited with {status}");
     }
-    println!("Built {manifest_path} for wasm32-unknown-unknown");
+
+    // Report the artifact so the developer can pass it straight to `deploy`.
+    let crate_dir = manifest.parent().context("manifest has no parent")?;
+    let out_dir = crate_dir.join("target/wasm32-unknown-unknown/release");
+    let mut wasms: Vec<_> = std::fs::read_dir(&out_dir)
+        .with_context(|| format!("reading {}", out_dir.display()))?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().and_then(|e| e.to_str()) == Some("wasm"))
+        .collect();
+    wasms.sort();
+    println!("Built {} for wasm32-unknown-unknown", crate_dir.display());
+    for w in wasms {
+        let len = std::fs::metadata(&w).map(|m| m.len()).unwrap_or(0);
+        println!("wasm: {} ({len} bytes)", w.display());
+    }
     Ok(())
 }
 
@@ -767,8 +798,13 @@ fn obtain_funding_utxo(
             rpc::find_mature_utxo(rpc, addr, &blocks)
         }
         Network::Testnet => {
-            let txid = std::env::var("ZALKANES_FUNDING_TXID")
-                .context("ZALKANES_FUNDING_TXID not set (testnet faucet txid)")?;
+            let txid = std::env::var("ZALKANES_FUNDING_TXID").with_context(|| {
+                format!(
+                    "ZALKANES_FUNDING_TXID not set: send testnet ZEC to the transparent \
+                     funding address {addr} (derived from ZALKANES_SIGNING_KEY), then set \
+                     ZALKANES_FUNDING_TXID (and ZALKANES_FUNDING_VOUT, default 0) to that payment"
+                )
+            })?;
             let vout = std::env::var("ZALKANES_FUNDING_VOUT")
                 .unwrap_or_else(|_| "0".to_string())
                 .parse::<u32>()
@@ -830,15 +866,16 @@ fn confirm_tx(rpc: &rpc::ZcashRpc, txid: &str, addr: &str, network: Network) -> 
 
 async fn contract_fund(blocks: u32) -> Result<()> {
     let network = network_from_env()?;
+    let key = signing_key()?;
+    let addr = funding_address(&key, network);
     if network != Network::Regtest {
         bail!(
-            "contract fund only mines blocks on regtest; on {} obtain funds from a faucet",
+            "contract fund only mines blocks on regtest; on {} send funds to the transparent \
+             funding address {addr} from a faucet, then set ZALKANES_FUNDING_TXID/VOUT",
             network.zebra_name()
         );
     }
     let rpc = rpc::ZcashRpc::new(&zcash_rpc_url()?)?;
-    let key = signing_key()?;
-    let addr = funding_address(&key, network);
     let mined = rpc.generate_to_address(blocks, &addr)?;
     println!("mined {blocks} blocks to {addr}");
     println!(
@@ -879,11 +916,14 @@ fn contract_deploy(wasm_path: &str, opts: wallet_cmd::SpendOptions, wait: bool) 
         hex::encode(code_hash.0)
     );
 
-    // Size the carriers from the EXACT ZIP-317 deploy fee.
+    // Size the carriers from the EXACT ZIP-317 deploy fee. The probe plan is
+    // only used to learn the fee, so its placeholder carrier values must be
+    // large enough never to fail the "carrier total >= fee" check themselves
+    // (a 50,000-zat placeholder was too small for contracts of 5+ chunks).
     let probe_outpoints: Vec<zalkanes_tx::OutPoint> = (0..chunks.len())
         .map(|i| zalkanes_tx::OutPoint::new([0xEE; 32], i as u32))
         .collect();
-    let probe_values = vec![50_000u64; chunks.len()];
+    let probe_values = vec![1_000_000_000u64; chunks.len()];
     let deploy_fee = zalkanes_tx::deploy_plan(
         &key,
         &probe_outpoints,
@@ -1001,6 +1041,18 @@ fn contract_call(
     let mut id = [0u8; 32];
     hex::decode_to_slice(contract_id, &mut id).context("contract id must be 32 hex bytes")?;
     let input = hex::decode(input_hex).context("input must be hex")?;
+    // The CLI builds inline CALL messages only. A larger input would produce
+    // an OP_RETURN above Zcash's 80-byte standardness limit, which Zebra
+    // rejects as non-standard at broadcast; fail here with a precise reason.
+    let max_inline = zalkanes_core::consensus::MAX_CALL_INLINE_BYTES as usize;
+    if input.len() > max_inline {
+        bail!(
+            "input is {} bytes but an inline CALL carries at most {max_inline} bytes; \
+             larger inputs need a CALL_CARRIER transaction, which this CLI does not build yet \
+             (see docs/developers/calling-contracts.md)",
+            input.len()
+        );
+    }
     let op_return = zalkanes_protocol::encode_call(&zalkanes_protocol::CallMessage {
         contract_id: zalkanes_core::types::ContractId(id),
         opcode,

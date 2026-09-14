@@ -71,8 +71,10 @@ Exposes `zalkanes_getInfo`, `zalkanes_view`, etc.
 Never exposes internal state engine directly; reads through a read-only handle.
 
 ### zalkanes-sdk
-Contract-side SDK: `#[zalkanes::contract]` macro, storage helpers,
-`CallResponse`, context access. Targets `wasm32-unknown-unknown`.
+Contract-side SDK: thin `no_std` wrappers over the six v0 host imports
+(storage get/set/delete, input read, output write, block height) plus
+big-endian `u64` helpers. Contracts export `dispatch(opcode, input_len)`
+themselves. Targets `wasm32-unknown-unknown`. See `docs/developers/sdk.md`.
 
 ### zalkanes-build
 Reproducible WASM build helpers.

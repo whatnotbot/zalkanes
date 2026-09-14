@@ -23,8 +23,10 @@ services:
       zebra-regtest:
         condition: service_healthy
     environment:
-      ZEBRA_RPC_URL: http://zebra-regtest:18232
+      # `zalkanes node serve` reads ZALKANES_RPC_URL for its Zebra endpoint.
+      ZALKANES_RPC_URL: http://zebra-regtest:18232
       ZALKANES_NETWORK: regtest
+      ZALKANES_DATA_DIR: /var/lib/zalkanes
       RUST_LOG: zalkanes=debug
     volumes:
       - zalkanes-data:/var/lib/zalkanes

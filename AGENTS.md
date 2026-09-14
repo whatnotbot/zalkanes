@@ -64,6 +64,7 @@ contracts/caller           reference cross-contract call demo
 
 ## Key documents
 
+- `docs/developers/README.md` — developer documentation entry point (CLI, SDK, examples)
 - `docs/protocol-v0.md` — canonical wire format (freeze before testnet)
 - `docs/wasm-consensus.md` — Wasmi version + config (consensus-critical)
 - `docs/upstream-lock.md` — pinned upstream versions
