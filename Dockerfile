@@ -14,8 +14,9 @@ COPY crates ./crates
 COPY contracts ./contracts
 COPY protocol ./protocol
 
-# Build the CLI (release). Excludes wasm32 contract crates via default-members.
-RUN cargo build --release -p zalkanes-cli
+# Build the CLI (release) against the frozen lockfile: a lockfile that no
+# longer matches the manifests must fail the build, never be regenerated.
+RUN cargo build --release --locked -p zalkanes-cli
 
 # ── Runtime image ────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
