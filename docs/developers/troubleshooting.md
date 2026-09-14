@@ -100,8 +100,12 @@ database directly and cannot while `node serve` holds it. Use
 `zalkanes_getStateRoot` / `zalkanes_getInfo` over RPC, or stop the node.
 
 **`indexed_height` stays behind `chain_tip_height`.** The node is syncing;
-on regtest it catches up within a few seconds. If it never does, read
-`.regtest/zalkanes.log` for `block processing failed`.
+on regtest it catches up within a few seconds. If it never does, look at
+`indexer` in `zalkanes_getInfo`: `state: "stalled"` with a `last_error`
+means upstream calls keep failing (the loop retries every poll and never
+exits on those); `state: "dead"` means a fatal local state error, and the
+process exits non-zero. `GET /ready` on the health port returns 503 in both
+cases even though `/health` is still 200. Read `.regtest/zalkanes.log`.
 
 **Two nodes disagree on `state_root` at the same height.** They run different
 code, a different `protocol_manifest_hash`, or a divergent Zebra. Compare the

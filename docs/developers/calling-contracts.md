@@ -120,7 +120,7 @@ An unknown contract id returns `"error":"invalid contract id"` (malformed) or
 
 | method | params | returns |
 |---|---|---|
-| `zalkanes_getInfo` | `[]` | protocol version, manifest hash, network, indexed height and hash, chain tip, state root, `syncing` |
+| `zalkanes_getInfo` | `[]` | protocol version, manifest hash, network, indexed height and hash, chain tip, state root, `syncing`, and `indexer` (`state` of `starting`/`healthy`/`syncing`/`stalled`/`dead`, `alive`, `advancing`, failure counters, `last_error`) |
 | `zalkanes_getStateRoot` | `[]` | the current state root |
 | `zalkanes_getContract` | `[id]` | `contract_id`, `code_hash`, `code_size`, or `null` |
 | `zalkanes_getCode` | `[id]` | the WASM as hex |

@@ -9,6 +9,7 @@
 #![forbid(unsafe_code)]
 
 mod parse;
+pub mod sync;
 
 use anyhow::Result;
 use tracing::{debug, info, warn};
