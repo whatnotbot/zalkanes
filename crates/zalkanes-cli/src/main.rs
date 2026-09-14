@@ -9,10 +9,13 @@ use anyhow::{bail, Context, Result};
 use clap::{Parser, Subcommand};
 use std::sync::{Arc, RwLock};
 use zalkanes_chain::{ChainSource, RpcChainSource};
-use zalkanes_core::types::{BlockHash, Network};
-use zalkanes_indexer::{process_zcash_block, IndexerConfig};
-use zalkanes_rpc::{RpcHandler, SharedState};
-use zalkanes_state::{BlockCommit, RocksState, StateStore};
+use zalkanes_core::types::Network;
+use zalkanes_indexer::{
+    sync::{self, IndexerHealth, SyncConfig},
+    IndexerConfig,
+};
+use zalkanes_rpc::{LivenessProbe, LivenessReport, RpcHandler};
+use zalkanes_state::{RocksState, StateStore};
 
 #[derive(Parser)]
 #[command(
@@ -363,6 +366,43 @@ async fn node_status() -> Result<()> {
 
 // ── node serve (real indexing loop) ──────────────────────────────────────────
 
+/// Adapts the indexing loop's health bookkeeping to the RPC crate's probe, so
+/// readiness and `zalkanes_getInfo` see the loop's real liveness without the
+/// RPC crate depending on the indexer.
+struct HealthProbe {
+    health: Arc<IndexerHealth>,
+    stale_after: std::time::Duration,
+}
+
+impl LivenessProbe for HealthProbe {
+    fn report(&self) -> LivenessReport {
+        use zalkanes_indexer::sync::Liveness as L;
+        let now = std::time::Instant::now();
+        let s = self.health.snapshot();
+        let ago =
+            |t: Option<std::time::Instant>| t.map(|t| now.saturating_duration_since(t).as_secs());
+        let liveness = match self.health.assess(now, self.stale_after) {
+            L::Starting => zalkanes_rpc::Liveness::Starting,
+            L::Healthy { caught_up } => zalkanes_rpc::Liveness::Healthy { caught_up },
+            L::Stalled { since, last_error } => {
+                zalkanes_rpc::Liveness::Stalled { since, last_error }
+            }
+            L::Dead(reason) => zalkanes_rpc::Liveness::Dead(reason),
+        };
+        LivenessReport {
+            liveness,
+            indexed_height: s.indexed_height,
+            tip_height: s.tip_height,
+            last_progress_secs_ago: ago(s.last_progress),
+            last_tick_ok_secs_ago: ago(s.last_tick_ok),
+            consecutive_failures: s.consecutive_failures,
+            total_failures: s.total_failures,
+            last_error: s.last_error,
+            dead_reason: s.dead,
+        }
+    }
+}
+
 /// Read `ZALKANES_REGTEST_ACTIVATION_HEIGHT`, which exists so regtest boundary
 /// tests can put blocks *below* the activation height (the manifest pins
 /// regtest activation at 1, leaving no room).
@@ -412,8 +452,18 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
         Box::new(RocksState::open(&dir)?) as Box<dyn StateStore>
     ));
 
+    // Liveness bookkeeping shared between the indexing loop and the health
+    // probes, so a dead or stalled indexer is never reported as healthy just
+    // because the RPC process is alive.
+    let sync_config = SyncConfig::default();
+    let health = Arc::new(IndexerHealth::new());
+
     // The RPC handler shares this exact store.
-    let handler = RpcHandler::new(network, store.clone());
+    let handler =
+        RpcHandler::new(network, store.clone()).with_liveness_probe(Arc::new(HealthProbe {
+            health: health.clone(),
+            stale_after: sync_config.stale_after,
+        }));
     let config = IndexerConfig {
         network,
         data_dir: dir.clone(),
@@ -459,15 +509,24 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
         }
     }
 
-    // Spawn the indexing loop.
+    // Spawn the indexing loop. Transient upstream failures are retried inside
+    // `sync::run`; it only returns on a fatal LOCAL error (state store), and
+    // then the process must not keep serving RPC over a dead indexer: exit
+    // non-zero so the supervisor restarts it.
     {
         let source = source.clone();
         let store = store.clone();
-        let handler = handler.clone();
+        let tip_handle = handler.chain_tip_handle();
         let config = config.clone();
+        let health = health.clone();
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
         tokio::spawn(async move {
-            if let Err(e) = indexing_loop(source, store, handler, config).await {
-                tracing::error!("indexing loop failed: {e:#}");
+            if let Err(e) =
+                sync::run(source, store, tip_handle, config, sync_config, health, stop).await
+            {
+                tracing::error!("indexing loop failed on a fatal local error: {e:#}");
+                tracing::error!("exiting so the supervisor restarts the node");
+                std::process::exit(1);
             }
         });
     }
@@ -487,204 +546,6 @@ async fn node_serve(port: Option<u16>, data_dir_opt: Option<String>) -> Result<(
     let addr = std::net::SocketAddr::from(([0, 0, 0, 0], port));
     tracing::info!(%addr, "Zalkanes JSON-RPC server listening");
     zalkanes_rpc::serve(addr, handler).await
-}
-
-/// The real indexing loop: pull canonical blocks from the chain source, parse
-/// them, execute Zalkanes messages, and atomically persist state.
-async fn indexing_loop(
-    source: Arc<RpcChainSource>,
-    store: SharedState,
-    handler: RpcHandler,
-    config: IndexerConfig,
-) -> Result<()> {
-    let mut interval = tokio::time::interval(std::time::Duration::from_secs(3));
-    loop {
-        interval.tick().await;
-
-        // 1. Refresh chain tip.
-        let tip = {
-            let s = source.clone();
-            match tokio::task::spawn_blocking(move || s.tip()).await {
-                Ok(Ok(t)) => t,
-                Ok(Err(e)) => {
-                    tracing::warn!("tip fetch failed: {e}");
-                    continue;
-                }
-                Err(e) => {
-                    tracing::warn!("tip task failed: {e}");
-                    continue;
-                }
-            }
-        };
-        *handler.chain_tip_handle().write().unwrap() = Some(tip);
-
-        // 2. Reorg detection: if our indexed tip no longer matches the canonical
-        //    chain, roll back to the common ancestor.
-        handle_reorg(&source, &store).await?;
-
-        // 2.5. Fast-forward below the activation height. Pre-activation blocks
-        //    have no protocol effect (state is provably empty), so instead of
-        //    fetching and deserializing each one we seek straight to
-        //    `activation - 1` and record its canonical block hash. This is
-        //    deterministic: the state root below activation is always the empty
-        //    root, and a fresh reindex follows the identical path.
-        if let Some(act) = config.activation_height() {
-            if act > 1 {
-                // Seek to the last below-activation block, clamped to the
-                // current tip so a future activation height does not try to
-                // fetch a block that does not exist yet.
-                let target = (act - 1).min(tip.height);
-                let below = {
-                    let g = store.read().unwrap();
-                    g.indexed_height().is_none_or(|h| h < target)
-                };
-                if below {
-                    let hash = {
-                        let s = source.clone();
-                        tokio::task::spawn_blocking(move || s.block_hash(target)).await??
-                    };
-                    let mut g = store.write().unwrap();
-                    g.commit_block(BlockCommit {
-                        height: target,
-                        zcash_block_hash: hash,
-                        deploys: Vec::new(),
-                        upserts: Vec::new(),
-                        deletes: Vec::new(),
-                    })?;
-                    tracing::info!(
-                        height = target,
-                        hash = %hash,
-                        "fast-forwarded below activation height"
-                    );
-                }
-            }
-        }
-
-        // 3. Determine next height to index.
-        loop {
-            let indexed = {
-                let g = store.read().unwrap();
-                g.indexed_height()
-            };
-            let next_height = indexed.map_or(1, |h| h + 1);
-
-            if next_height > tip.height {
-                break; // caught up
-            }
-
-            // 3. Fetch canonical block hash at height.
-            let hash = {
-                let s = source.clone();
-                match tokio::task::spawn_blocking(move || s.block_hash(next_height)).await {
-                    Ok(Ok(h)) => h,
-                    Ok(Err(e)) => {
-                        tracing::warn!(height = next_height, "block_hash failed: {e}");
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!(height = next_height, "block_hash task failed: {e}");
-                        break;
-                    }
-                }
-            };
-
-            // Below activation: skip the raw fetch + deserialization and commit
-            // an empty block directly (the fast path in `process_zcash_block`
-            // ignores `raw_block`). Reached only if a reorg rolls the indexer
-            // below the fast-forward point.
-            if let Some(act) = config.activation_height() {
-                if next_height < act {
-                    let result = {
-                        let mut g = store.write().unwrap();
-                        process_zcash_block(&mut **g, &config, next_height, BlockHash(hash.0), &[])
-                    };
-                    match result {
-                        Ok(_) => continue,
-                        Err(e) => {
-                            tracing::error!(height = next_height, error = %e, "block processing failed");
-                            break;
-                        }
-                    }
-                }
-            }
-
-            // 4. Fetch raw block.
-            let raw = {
-                let s = source.clone();
-                match tokio::task::spawn_blocking(move || s.raw_block(&hash)).await {
-                    Ok(Ok(r)) => r,
-                    Ok(Err(e)) => {
-                        tracing::warn!(height = next_height, "raw_block failed: {e}");
-                        break;
-                    }
-                    Err(e) => {
-                        tracing::warn!(height = next_height, "raw_block task failed: {e}");
-                        break;
-                    }
-                }
-            };
-
-            // 5. Process against persistent state.
-            let result = {
-                let mut g = store.write().unwrap();
-                process_zcash_block(&mut **g, &config, next_height, BlockHash(hash.0), &raw)
-            };
-            match result {
-                Ok(exec) => {
-                    tracing::info!(
-                        height = next_height,
-                        executions = exec.executions.len(),
-                        deployed = exec.deployed.len(),
-                        root = %exec.state_root_after,
-                        "indexed block"
-                    );
-                }
-                Err(e) => {
-                    // A deserialization/processing failure must not wedge the
-                    // loop; log and continue. Reorgs are handled by rollback
-                    // logic in process_zcash_block's commit path.
-                    tracing::error!(height = next_height, error = %e, "block processing failed");
-                    break;
-                }
-            }
-        }
-    }
-}
-
-/// Detect a reorg: compare our indexed block hash at each height against the
-/// canonical chain's hash, rolling back until they agree.
-async fn handle_reorg(source: &Arc<RpcChainSource>, store: &SharedState) -> Result<()> {
-    loop {
-        let (indexed_height, indexed_hash) = {
-            let g = store.read().unwrap();
-            (g.indexed_height(), g.indexed_block_hash())
-        };
-
-        let Some(height) = indexed_height else { break };
-        let Some(our_hash) = indexed_hash else { break };
-
-        let canonical_hash = {
-            let s = source.clone();
-            tokio::task::spawn_blocking(move || s.block_hash(height)).await??
-        };
-
-        if canonical_hash.0 == our_hash.0 {
-            break; // in agreement — no reorg at this height
-        }
-
-        tracing::warn!(
-            height,
-            our = %hex::encode(our_hash.0),
-            canonical = %hex::encode(canonical_hash.0),
-            "reorg detected; rolling back"
-        );
-
-        {
-            let mut g = store.write().unwrap();
-            g.rollback_to(height - 1)?;
-        }
-    }
-    Ok(())
 }
 
 // ── contract build ───────────────────────────────────────────────────────────
