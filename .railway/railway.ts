@@ -102,6 +102,44 @@ export default defineRailway(() => {
     },
   });
 
+  // RC2 public-testnet indexers (docs/release/testnet-rc2-deployment.md).
+  //
+  // Two INDEPENDENTLY initialised Zalkanes nodes on NEW, empty volumes, both
+  // following the same validating `zebra-testnet`. They exist so that
+  // agreement on the indexed block hash and state root is evidence, not an
+  // artefact of one database. The pre-freeze `zalkanes-testnet` service above
+  // holds a database built under the superseded activation; it is retired at
+  // deployment (its volume is preserved as historical evidence, never wiped
+  // and never reused).
+  const rc2Indexer = (name: string, data: ReturnType<typeof volume>) =>
+    service(name, {
+      start: "zalkanes node serve",
+      source: github("whatnotbot/zalkanes", { branch: "main" }),
+      build: {
+        builder: "DOCKERFILE",
+        dockerfilePath: "Dockerfile",
+      },
+      variables: {
+        RUST_LOG: "zalkanes=info",
+        ZALKANES_NETWORK: "testnet",
+        ZALKANES_DATA_DIR: "/data/zalkanes",
+        ZALKANES_RPC_URL: "http://zebra-testnet.railway.internal:18232",
+      },
+      volumeMounts: {
+        "/data/zalkanes": data,
+      },
+    });
+  const zalkanesRc2AData = volume("zalkanes-testnet-rc2-a-volume", {
+    region: "ams",
+    sizeMB: 50_000,
+  });
+  const zalkanesRc2BData = volume("zalkanes-testnet-rc2-b-volume", {
+    region: "ams",
+    sizeMB: 50_000,
+  });
+  const zalkanesRc2A = rc2Indexer("zalkanes-testnet-rc2-a", zalkanesRc2AData);
+  const zalkanesRc2B = rc2Indexer("zalkanes-testnet-rc2-b", zalkanesRc2BData);
+
   return project("zalkanes", {
     resources: [
       zebra,
@@ -112,6 +150,10 @@ export default defineRailway(() => {
       zebraTestnetData,
       zalkanesTestnet,
       zalkanesTestnetData,
+      zalkanesRc2A,
+      zalkanesRc2AData,
+      zalkanesRc2B,
+      zalkanesRc2BData,
     ],
   });
 });

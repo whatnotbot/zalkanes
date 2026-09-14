@@ -90,6 +90,12 @@ is still syncing. Compare state roots between two nodes at the same height
 with `scripts/compare-state-roots.sh`. A Zcash testnet block explorer shows
 the raw transaction, its OP_RETURN, and (for DEPLOY) the carrier inputs.
 
+## Deployment runbook
+
+The operator procedure for bringing up two clean RC2 nodes, proving they
+agree, and running the one-time platform acceptance is
+`docs/release/testnet-rc2-deployment.md`. It is prepared and not executed.
+
 ## Historical evidence
 
 - `docs/release/testnet-activation.md`: the pre-freeze testnet deployment
