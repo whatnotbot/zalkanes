@@ -1,11 +1,16 @@
-//! Token contract — fungible asset reference implementation.
+//! Token contract — fungible balance-ledger reference implementation.
+//!
+//! Educational example only. Protocol v0 exposes no caller identity to a
+//! contract, so this ledger has NO access control: every opcode is callable
+//! by anyone, `from`/`owner` are plain input bytes, and `b"owner"` is stored
+//! but never checked. See contracts/token/README.md.
 //!
 //! Opcodes:
-//!   0x0001  initialize(supply: u128 BE)   — sets total supply to deployer
+//!   0x0001  initialize(supply: u128 BE, owner: [u8;32]) — sets supply, credits owner
 //!   0x0002  balance_of(addr: [u8;32]) -> u128 BE
-//!   0x0003  transfer(to: [u8;32], amount: u128 BE) — caller is input[64..80]
-//!   0x0004  mint(to: [u8;32], amount: u128 BE)     — only owner
-//!   0x0005  burn(from: [u8;32], amount: u128 BE)   — only owner
+//!   0x0003  transfer(from: [u8;32], to: [u8;32], amount: u128 BE)
+//!   0x0004  mint(to: [u8;32], amount: u128 BE)
+//!   0x0005  burn(from: [u8;32], amount: u128 BE)
 //!   0x0006  total_supply() -> u128 BE
 //!
 //! Storage keys:

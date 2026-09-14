@@ -1,14 +1,28 @@
-# Zebra regtest configuration for Zalkanes development
+# Zebra regtest configuration for the docker-compose development environment.
+#
+# Same shape as deploy/zebra/zebra-regtest.toml (known-good for the pinned
+# zebrad v6.3.0): every network upgrade active from height 1 so V5/ZIP-244
+# transactions are valid from genesis, no peers, RPC without cookie auth.
+# Regtest only — never use this config on a real network.
 [network]
-network = "Regtest"
+network = { regtest = true, params = { activation_heights = { NU5 = 1, NU6 = 1, "NU6.1" = 1, "NU6.2" = 1, "NU6.3" = 1 } } }
 listen_addr = "0.0.0.0:18233"
-
-[rpc]
-listen_addr = "0.0.0.0:18232"
-# No auth for regtest — do NOT use this config in production
+initial_mainnet_peers = []
+initial_testnet_peers = []
 
 [state]
 cache_dir = "/var/lib/zebra"
+ephemeral = false
 
 [consensus]
 checkpoint_sync = false
+
+[rpc]
+listen_addr = "0.0.0.0:18232"
+enable_cookie_auth = false
+
+[mining]
+# Blocks are produced on demand by the CLI (`generatetoaddress`), not by a
+# continuously running internal miner.
+internal_miner = false
+miner_address = "t27eWDgjFYJGVXmzrXeVjnb5J3uXDM9xH9v"
