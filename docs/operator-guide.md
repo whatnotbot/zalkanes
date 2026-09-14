@@ -142,9 +142,19 @@ fresh database, expect the initial catch-up to be RPC-bound.
 
 | endpoint | meaning |
 |---|---|
-| `GET /health` (`PORT+1`) | process is alive |
-| `GET /ready` | 200 synced, 202 syncing, 503 unhealthy |
-| `zalkanes_getInfo` | height, block hash, **state root**, manifest hash, syncing |
+| `GET /health` (`PORT+1`) | **process** is alive; says nothing about indexing |
+| `GET /ready` | 200 caught up, 202 syncing or starting, **503 when the indexing loop is dead or stalled** (no progress for 120 s), with the reason in the body |
+| `zalkanes_getInfo` | height, block hash, **state root**, manifest hash, syncing, and an `indexer` object (`state`, `alive`, `advancing`, failure counters, last error) |
+
+Process liveness and indexer health are deliberately separate. A transient
+Zebra RPC failure (unreachable node, or a tip race where `getblockhash(H)`
+answers "Provided index is greater than the current tip" right after the tip
+reported `H`) is logged, counted in `indexer.consecutive_failures`, and
+retried on the next poll; it never stops the loop. A **fatal local** failure
+(the state database refuses a commit or rollback) marks the indexer dead,
+`/ready` returns 503, and the process exits non-zero so the supervisor
+restarts it rather than serving RPC over a dead indexer. Alert on
+`indexer.state` being `stalled` or `dead`.
 
 **Monitor the state root.** It is the single number that proves your node
 agrees with the network.
